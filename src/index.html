@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nova Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="window" id="window">
+    <header class="titlebar drag">
+      <div class="avatar" aria-hidden="true">
+        <div class="pulse"></div>
+      </div>
+      <div class="app-title">Nova</div>
+      <div class="win-controls no-drag">
+        <button class="ctrl" id="minBtn" title="Minimize">–</button>
+        <button class="ctrl" id="closeBtn" title="Close">×</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <div class="suggestions no-drag">
+        <button class="chip">Summarize screen</button>
+        <button class="chip">Find action buttons</button>
+        <button class="chip">Explain this error</button>
+      </div>
+
+      <div class="chat" id="chat"></div>
+
+      <div class="inputbar no-drag">
+        <button class="icon" id="micBtn" title="Hold to talk">🎤</button>
+        <input id="prompt" type="text" placeholder="Ask anything…" autocomplete="off" aria-label="Prompt" />
+        <button class="send" id="sendBtn" title="Send">↵</button>
+      </div>
+    </main>
+  </div>
+
+  <script src="./renderer.js"></script>
+</body>
+</html>
