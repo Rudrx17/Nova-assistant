@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld('nova', {
   onEnd: (cb) => ipcRenderer.on('ai:end', (_e, data) => cb(data)),
   onError: (cb) => ipcRenderer.on('ai:error', (_e, data) => cb(data)),
   closeWindow: () => ipcRenderer.send('window:close'),
-  minimizeWindow: () => ipcRenderer.send('window:minimize')
+  minimizeWindow: () => ipcRenderer.send('window:minimize'),
+  onVoice: (cb) => ipcRenderer.on('voice:transcript', (_e, text) => cb(text))
 });

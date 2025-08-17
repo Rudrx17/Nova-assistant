@@ -75,41 +75,24 @@ window.nova.onError(({ error }) => {
   updateLastMsg(`\n[Error: ${error}]`);
 });
 
-// Mic Support (Speech-to-Text)
-let recognition;
+// Mic Support via Python backend
 let listening = false;
-if ('webkitSpeechRecognition' in window) {
-  const WSR = window.webkitSpeechRecognition;
-  recognition = new WSR();
-  recognition.lang = 'en-US';
-  recognition.continuous = false;
-  recognition.interimResults = false;
 
-  recognition.onresult = (e) => {
-    const transcript = e.results[0][0].transcript;
-    promptInput.value = transcript;
-    sendPrompt();
-  };
+micBtn.addEventListener('mousedown', () => {
+  listening = true;
+  micBtn.classList.add('active');
+});
 
-  recognition.onend = () => {
-    listening = false;
-    micBtn.classList.remove('active');
-  };
+micBtn.addEventListener('mouseup', () => {
+  listening = false;
+  micBtn.classList.remove('active');
+});
 
-  micBtn.addEventListener('mousedown', () => {
-    if (!listening) {
-      listening = true;
-      micBtn.classList.add('active');
-      recognition.start();
-    }
-  });
-  micBtn.addEventListener('mouseup', () => {
-    if (listening) recognition.stop();
-  });
-  micBtn.addEventListener('mouseleave', () => {
-    if (listening) recognition.stop();
-  });
-}
+// Receive transcript from Python
+window.nova.onVoice((transcript) => {
+  promptInput.value = transcript;
+  sendPrompt();
+});
 
 // Window Controls
 closeBtn.addEventListener('click', () => window.nova.closeWindow());

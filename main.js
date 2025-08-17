@@ -1,7 +1,7 @@
-// main.js
 const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 
 require('dotenv').config();
 
@@ -9,24 +9,9 @@ require('dotenv').config();
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// --- VOSK (offline STT) ---
-let Vosk;
-let Model;
-let KaldiRecognizer;
-let voskModel = null;
-const MODEL_DIR = path.join(__dirname, 'models', 'vosk-model-small-en-us-0.15'); // change if needed
-
-try {
-  // lazy require; will throw if native module not installed
-  Vosk = require('vosk');
-  Model = Vosk.Model;
-  KaldiRecognizer = Vosk.KaldiRecognizer;
-} catch (e) {
-  console.warn('Vosk module is not installed or failed to load. STT will not be available until you install vosk.', e?.message || e);
-}
-
 let win;
 let tray;
+let pyProcess;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -47,7 +32,6 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       devTools: true,
-      // allow getUserMedia
       experimentalFeatures: true
     }
   });
@@ -80,6 +64,30 @@ function toggleWindow() {
 app.whenReady().then(() => {
   createWindow();
 
+  // ---- Python Voice Process (use .venv interpreter) ----
+  pyProcess = spawn(
+    path.join(__dirname, '.venv', 'Scripts', 'python.exe'),
+    [path.join(__dirname, 'voice.py')]
+  );
+
+  pyProcess.stdout.on('data', (data) => {
+    const msg = data.toString().trim();
+    if (msg.startsWith("TRANSCRIPT::")) {
+      const transcript = msg.replace("TRANSCRIPT::", "").trim();
+      if (win) win.webContents.send('voice:transcript', transcript);
+    } else {
+      console.log("[Python]", msg);
+    }
+  });
+
+  pyProcess.stderr.on('data', (data) => {
+    console.error("[Python ERR]", data.toString());
+  });
+
+  pyProcess.on('close', (code) => {
+    console.log(`Python process exited with code ${code}`);
+  });
+
   const trayIconPath = path.join(__dirname, 'assets', 'tray.png');
   const trayIcon = fs.existsSync(trayIconPath) ? nativeImage.createFromPath(trayIconPath) : nativeImage.createEmpty();
   tray = new Tray(trayIcon);
@@ -96,6 +104,7 @@ app.whenReady().then(() => {
 });
 
 app.on('will-quit', () => {
+  if (pyProcess) pyProcess.kill();
   globalShortcut.unregisterAll();
 });
 
@@ -135,74 +144,6 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
   } catch (err) {
     console.error('Gemini API Error:', err);
     event.sender.send('ai:error', { requestId, error: err.message || String(err) });
-  }
-});
-
-// ---------- Vosk STT handler ----------
-ipcMain.handle('stt:transcribe', async (event, arrayBuffer) => {
-  // returns transcribed string
-  // If mock mode, return mocked text
-  if (process.env.MOCK_MODE === 'true') return 'this is a mocked transcription';
-
-  // Ensure Vosk is available
-  if (!Model || !KaldiRecognizer) {
-    throw new Error('Vosk is not installed or failed to load. Install via `npm install vosk` and ensure native build tools are available.');
-  }
-
-  // Load model once
-  if (!voskModel) {
-    if (!fs.existsSync(MODEL_DIR)) {
-      throw new Error(`Vosk model not found at ${MODEL_DIR}. Download a model and extract to this path.`);
-    }
-    try {
-      voskModel = new Model(MODEL_DIR);
-      console.log('Vosk model loaded from', MODEL_DIR);
-    } catch (err) {
-      console.error('Failed to load Vosk model:', err);
-      throw err;
-    }
-  }
-
-  try {
-    // arrayBuffer arrives as an object convertible to Buffer
-    const audioBuffer = Buffer.from(arrayBuffer);
-
-    // Detect WAV header: if present, strip first 44 bytes (WAV header)
-    let pcmBuffer = audioBuffer;
-    const header = audioBuffer.slice(0, 4).toString('ascii');
-    if (header === 'RIFF') {
-      // assume standard WAV header 44 bytes
-      pcmBuffer = audioBuffer.slice(44);
-    }
-
-    // Create recognizer (16000 Hz)
-    const rec = new KaldiRecognizer(voskModel, 16000);
-    // Vosk expects raw PCM16LE data
-    const accepted = rec.acceptWaveform(pcmBuffer);
-    let resultJson;
-    if (accepted) {
-      resultJson = rec.finalResult();
-    } else {
-      resultJson = rec.finalResult(); // use finalResult for completeness
-    }
-
-    // resultJson is a JSON string or object depending on version
-    let text = '';
-    if (typeof resultJson === 'string') {
-      try {
-        const parsed = JSON.parse(resultJson);
-        text = parsed.text || '';
-      } catch (e) {
-        text = resultJson;
-      }
-    } else if (typeof resultJson === 'object') {
-      text = resultJson.text || '';
-    }
-
-    return text;
-  } catch (err) {
-    console.error('Vosk transcription error:', err);
-    throw err;
   }
 });
 
