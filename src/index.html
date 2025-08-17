@@ -15,7 +15,10 @@
       <div class="avatar" aria-hidden="true">
         <div class="pulse"></div>
       </div>
-      <div class="app-title">Nova</div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div class="app-title">Nova</div>
+        <div id="status" class="status">Idle</div>
+      </div>
       <div class="win-controls no-drag">
         <button class="ctrl" id="minBtn" title="Minimize">–</button>
         <button class="ctrl" id="closeBtn" title="Close">×</button>
@@ -27,6 +30,21 @@
         <button class="chip">Summarize screen</button>
         <button class="chip">Find action buttons</button>
         <button class="chip">Explain this error</button>
+      </div>
+
+      <div class="controls no-drag">
+        <div class="control-item">
+          <label for="voiceSelect">Voice</label>
+          <select id="voiceSelect"></select>
+        </div>
+        <div class="control-item">
+          <label for="pitchRange">Pitch</label>
+          <input id="pitchRange" type="range" min="0.5" max="2" step="0.1" value="1">
+        </div>
+        <div class="control-item">
+          <label for="rateRange">Rate</label>
+          <input id="rateRange" type="range" min="0.6" max="1.6" step="0.05" value="1">
+        </div>
       </div>
 
       <div class="chat" id="chat"></div>

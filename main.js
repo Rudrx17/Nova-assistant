@@ -12,6 +12,7 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 let win;
 let tray;
 let pyProcess;
+let voiceMuted = false; // when true, ignore transcripts
 
 function createWindow() {
   win = new BrowserWindow({
@@ -71,17 +72,29 @@ app.whenReady().then(() => {
   );
 
   pyProcess.stdout.on('data', (data) => {
-    const msg = data.toString().trim();
-    if (msg.startsWith("TRANSCRIPT::")) {
-      const transcript = msg.replace("TRANSCRIPT::", "").trim();
-      if (win) win.webContents.send('voice:transcript', transcript);
-    } else {
-      console.log("[Python]", msg);
+    const text = data.toString();
+    // Split into lines to avoid chunks that combine multiple messages (e.g. TRANSCRIPT:: + CMD::)
+    const lines = text.split(/\r?\n/);
+    for (const raw of lines) {
+      const msg = raw.trim();
+      if (!msg) continue;
+      if (msg.startsWith("TRANSCRIPT::")) {
+        const transcript = msg.replace("TRANSCRIPT::", "").trim();
+        if (!voiceMuted && win) win.webContents.send('voice:transcript', transcript);
+      } else {
+        console.log("[Python]", msg);
+      }
     }
   });
 
   pyProcess.stderr.on('data', (data) => {
-    console.error("[Python ERR]", data.toString());
+    const text = data.toString();
+    const lines = text.split(/\r?\n/);
+    for (const raw of lines) {
+      const msg = raw.trim();
+      if (!msg) continue;
+      console.error("[Python ERR]", msg);
+    }
   });
 
   pyProcess.on('close', (code) => {
@@ -134,6 +147,9 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
 
   // Real Gemini streaming
   try {
+    // Mute voice transcripts while assistant speaks to avoid feedback loop
+    voiceMuted = true;
+    if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('MUTE\n');
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
     const result = await model.generateContentStream(text);
     for await (const chunk of result.stream) {
@@ -141,9 +157,15 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
       if (chunkText) event.sender.send('ai:delta', { requestId, content: chunkText });
     }
     event.sender.send('ai:end', { requestId });
+    // Unmute after a short delay so TTS finishes
+    setTimeout(() => {
+      voiceMuted = false;
+      if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('UNMUTE\n');
+    }, 250);
   } catch (err) {
     console.error('Gemini API Error:', err);
     event.sender.send('ai:error', { requestId, error: err.message || String(err) });
+    voiceMuted = false;
   }
 });
 
@@ -151,4 +173,48 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
 ipcMain.on('ai:stop', (event, { requestId }) => {
   console.log(`Stopping AI request ${requestId}`);
   event.sender.send('ai:stopped', { requestId });
+});
+
+// Summarization handler: creates a short spoken summary from full assistant text
+ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
+  if (!text) return;
+
+  // Mock summarization
+  if (process.env.MOCK_MODE === 'true') {
+    const fakeSummary = 'Short summary: ' + (text.split('.').slice(0,2).join('.').slice(0,200) || text.slice(0,120));
+    event.sender.send('ai:summary', { requestId, summary: fakeSummary });
+    return;
+  }
+
+  try {
+    const prompt = `Summarize the following assistant response into two concise sentences suitable for speaking aloud:\n\n${text}`;
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const result = await model.generateContentStream(prompt);
+    let collected = '';
+    for await (const chunk of result.stream) {
+      const chunkText = chunk.text();
+      if (chunkText) collected += chunkText;
+    }
+    const summary = collected.trim() || (text.split('.').slice(0,2).join('.')) || text.slice(0,160);
+    event.sender.send('ai:summary', { requestId, summary });
+  } catch (err) {
+    console.error('Summarize Error:', err);
+    event.sender.send('ai:summary', { requestId, summary: text.split('.').slice(0,2).join('.') });
+  }
+});
+
+// Voice control handlers forwarded to Python helper via stdin
+ipcMain.on('voice:start', () => {
+  if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('START\n');
+});
+ipcMain.on('voice:stop', () => {
+  if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('STOP\n');
+});
+ipcMain.on('voice:mute', () => {
+  voiceMuted = true;
+  if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('MUTE\n');
+});
+ipcMain.on('voice:unmute', () => {
+  voiceMuted = false;
+  if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('UNMUTE\n');
 });

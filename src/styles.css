@@ -1,5 +1,5 @@
 :root {
-  --glass-bg: rgba(20, 22, 29, 0.55);
+  --glass-bg: rgba(20, 22, 29, 0.592);
   --glass-stroke: rgba(255, 255, 255, 0.15);
   --text: #f2f5fb;
   --muted: #aab2c5;
@@ -54,6 +54,23 @@ body {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .app-title { font-weight: 700; letter-spacing: .4px; }
+
+.status {
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--glass-stroke);
+  color: var(--muted);
+}
+.status.listening { background: rgba(75,163,255,0.15); color: var(--accent); box-shadow: 0 4px 18px rgba(75,163,255,0.12); }
+.status.thinking { background: rgba(255,215,0,0.12); color: #f5c542; box-shadow: 0 4px 18px rgba(245,197,66,0.08); }
+.status.speaking { background: rgba(0,200,120,0.12); color: #62d58a; box-shadow: 0 4px 18px rgba(98,213,138,0.08); }
+
+.controls { display:flex; gap:10px; align-items:center; margin-bottom:6px; }
+.control-item { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted); }
+.control-item select, .control-item input[type="range"] { background: rgba(255,255,255,0.04); border: 1px solid var(--glass-stroke); height:28px; border-radius:8px; }
+.control-item label { color: var(--muted); font-size:11px; }
 
 .win-controls { display: flex; gap: 8px; justify-content: flex-end; }
 .ctrl {
