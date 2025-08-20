@@ -182,6 +182,8 @@ micBtn.addEventListener('mouseleave', () => {
 
 // Receive transcript from Python
 window.nova.onVoice((transcript) => {
+  if (!transcript?.trim()) return; // Ignore empty transcripts
+  
   promptInput.value = transcript;
   if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
   sendPrompt();
@@ -190,6 +192,3 @@ window.nova.onVoice((transcript) => {
 // Window Controls
 closeBtn.addEventListener('click', () => window.nova.closeWindow());
 minBtn.addEventListener('click', () => window.nova.minimizeWindow());
-window.nova.onEnd(() => {
-  if (!speaking && statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
-});

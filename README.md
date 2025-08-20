@@ -27,3 +27,11 @@ cd nova-assistant
 npm install
 npm start
 ```
+
+## Python Requirements
+
+For voice functionality, install dependencies using:
+
+```bash
+pip install -r requirements.txt
+```
