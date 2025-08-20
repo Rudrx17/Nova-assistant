@@ -7,7 +7,10 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
 body {
   margin: 0;
   font-family: Inter, system-ui, Segoe UI, Roboto, sans-serif;
@@ -89,7 +92,19 @@ body {
 }
 .chip:hover { color: var(--text); background: rgba(255,255,255,0.10); }
 
-.chat { flex: 1; overflow: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 2px; }
+.chat {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-right: 2px;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge */
+}
+.chat::-webkit-scrollbar {
+  display: none; /* Chrome/Safari/Opera */
+}
 
 .msg { max-width: 85%; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--glass-stroke); }
 .msg.user { align-self: flex-end; background: rgba(75,163,255,0.16); }
@@ -109,3 +124,4 @@ body {
   height: 36px; background: transparent; border: none; outline: none; color: var(--text);
 }
 #prompt::placeholder { color: var(--muted); }
+
