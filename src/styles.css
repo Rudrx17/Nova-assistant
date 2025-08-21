@@ -101,6 +101,7 @@ body {
   padding-right: 2px;
   scrollbar-width: none; /* Firefox */
   -ms-overflow-style: none; /* IE/Edge */
+  scroll-behavior: smooth;
 }
 .chat::-webkit-scrollbar {
   display: none; /* Chrome/Safari/Opera */

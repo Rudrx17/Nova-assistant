@@ -21,13 +21,44 @@ function addMsg(text, who = 'assistant') {
   div.className = `msg ${who}`;
   div.textContent = text;
   chat.appendChild(div);
-  chat.scrollTop = chat.scrollHeight;
+  
+  // Force layout recalc and ensure reliable scrolling
+  setTimeout(() => {
+    if (!chat) return;
+    
+    // Force layout recalculation
+    const scrollHeight = chat.scrollHeight;
+    const clientHeight = chat.clientHeight;
+    
+    // Only scroll if content exceeds container
+    if (scrollHeight > clientHeight) {
+      chat.scrollTo({
+        top: scrollHeight,
+        behavior: 'smooth'
+      });
+    }
+  }, 10);
 }
 
 // Update last assistant message
 function updateLastMsg(extra) {
   if (chat.lastChild && chat.lastChild.classList.contains('assistant')) {
     chat.lastChild.textContent += extra;
+    
+    // Auto-scroll during streaming too
+    setTimeout(() => {
+      if (!chat) return;
+      const {scrollHeight, clientHeight, scrollTop} = chat;
+      const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+      
+      // Only scroll if within 200px of bottom
+      if (distanceFromBottom < 200) {
+        chat.scrollTo({
+          top: scrollHeight,
+          behavior: 'auto'
+        });
+      }
+    }, 0);
   }
 }
 
