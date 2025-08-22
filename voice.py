@@ -1,9 +1,10 @@
-import sys, threading, queue, time, logging, concurrent.futures
+import os, sys, threading, queue, time, logging, concurrent.futures, struct
 import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
 import webrtcvad
 import warnings
+import pvporcupine
 
 # Suppress pkg_resources deprecation warnings from webrtcvad
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -19,12 +20,30 @@ RECOG_TIMEOUT = 10
 
 vad = webrtcvad.Vad(2)  # 0–3 (3 = most aggressive)
 ENERGY_THRESHOLD = 500.0
-MAX_SEGMENT_MS = 8000  # max utterance length
+MAX_SEGMENT_MS = 8000   # max utterance length
 SILENCE_LIMIT_MS = 500  # how long silence ends speech (ms)
 
 recording_enabled = True
 muted = False
 cmd_queue = queue.Queue()
+
+# ---- Wake Word (Porcupine) ----
+# Prefer reading key from env (.env -> PICOVOICE_ACCESS_KEY); fallback to inline.
+ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "").strip() or "PUT-YOUR-ACCESS-KEY-HERE"
+
+# Resolve the .ppn path relative to this file
+HERE = os.path.dirname(os.path.abspath(__file__))
+KEYWORD_PATH = os.path.join(HERE, "hey-nova_en_windows_v3_0_0.ppn")
+
+try:
+    porcupine = pvporcupine.create(
+        access_key=ACCESS_KEY,
+        keyword_paths=[KEYWORD_PATH],
+    )
+except Exception as e:
+    logger.error(f"Failed to init Porcupine. Check access key and .ppn path.\nKey set: {bool(ACCESS_KEY)}  Path exists: {os.path.exists(KEYWORD_PATH)}\n{e}")
+    print(f"ERROR::Porcupine init failed: {e}", flush=True)
+    sys.exit(1)
 
 def stdin_watcher(q):
     for line in sys.stdin:
@@ -68,6 +87,22 @@ def recognize_bytes(pcm_bytes: bytes) -> str | None:
             logger.error(f"Recognition error: {e}")
             return None
 
+# ---- Wake Word Listener ----
+def listen_for_wake_word():
+    with sd.RawInputStream(samplerate=porcupine.sample_rate,
+                           blocksize=porcupine.frame_length,
+                           channels=1,
+                           dtype='int16') as wake_audio:
+        logger.info("Wake word engine running...")
+        while True:
+            pcm = wake_audio.read(porcupine.frame_length)[0]
+            pcm = struct.unpack_from("h" * porcupine.frame_length, pcm)
+            keyword_index = porcupine.process(pcm)
+            if keyword_index >= 0:
+                print("WAKEWORD::Hey Nova", flush=True)
+                return  # exit loop when detected
+
+# ---- Transcription (after wake word) ----
 def stream_and_transcribe():
     buffer = []
     silence_frames = 0
@@ -135,7 +170,9 @@ def stream_and_transcribe():
 
 if __name__ == "__main__":
     try:
-        stream_and_transcribe()
+        while True:
+            listen_for_wake_word()   # wait for Hey Nova
+            stream_and_transcribe()  # then transcribe
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         print(f"ERROR::{e}", flush=True)

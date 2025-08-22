@@ -12,9 +12,12 @@ contextBridge.exposeInMainWorld('nova', {
   startVoice: () => ipcRenderer.send('voice:start'),
   stopVoice: () => ipcRenderer.send('voice:stop'),
   muteVoice: () => ipcRenderer.send('voice:mute'),
-  unmuteVoice: () => ipcRenderer.send('voice:unmute')
-  ,
+  unmuteVoice: () => ipcRenderer.send('voice:unmute'),
+
   // Summarization helper: request a short spoken summary of a full assistant response
   summarize: (fullText, requestId) => ipcRenderer.send('ai:summarize', { text: fullText, requestId }),
-  onSummary: (cb) => ipcRenderer.on('ai:summary', (_e, data) => cb(data))
+  onSummary: (cb) => ipcRenderer.on('ai:summary', (_e, data) => cb(data)),
+
+  // Wake word event listener
+  onWakeWord: (cb) => ipcRenderer.on('voice:wakeword', (_e, word) => cb(word))
 });

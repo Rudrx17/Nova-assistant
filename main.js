@@ -81,6 +81,9 @@ app.whenReady().then(() => {
       if (msg.startsWith("TRANSCRIPT::")) {
         const transcript = msg.replace("TRANSCRIPT::", "").trim();
         if (!voiceMuted && win) win.webContents.send('voice:transcript', transcript);
+      } else if (msg.startsWith("WAKEWORD::")) {
+        const word = msg.replace("WAKEWORD::", "").trim();
+        if (win) win.webContents.send('voice:wakeword', word);
       } else {
         console.log("[Python]", msg);
       }

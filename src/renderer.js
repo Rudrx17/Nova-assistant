@@ -5,6 +5,7 @@ const micBtn = document.getElementById('micBtn');
 const closeBtn = document.getElementById('closeBtn');
 const minBtn = document.getElementById('minBtn');
 const statusEl = document.getElementById('status');
+const modeSelect = document.getElementById('modeSelect');
 
 // Speech Synthesis setup
 let synth = window.speechSynthesis;
@@ -15,6 +16,30 @@ let pitchControl = null;
 let rateControl = null;
 let voiceSelect = null;
 
+// Config: Default input mode
+let inputMode = 'wake'; // can be 'mic', 'wake', or 'hybrid'
+updateInputModeUI();
+
+// Update UI and behavior based on input mode
+function updateInputModeUI() {
+  if (inputMode === 'wake') {
+    micBtn.style.display = 'none';
+  } else if (inputMode === 'mic') {
+    micBtn.style.display = 'inline-block';
+  } else if (inputMode === 'hybrid') {
+    micBtn.style.display = 'inline-block';
+  }
+}
+
+// Handle dropdown change
+if (modeSelect) {
+  modeSelect.value = inputMode;
+  modeSelect.addEventListener('change', () => {
+    inputMode = modeSelect.value;
+    updateInputModeUI();
+  });
+}
+
 // Add message to chat
 function addMsg(text, who = 'assistant') {
   const div = document.createElement('div');
@@ -22,15 +47,10 @@ function addMsg(text, who = 'assistant') {
   div.textContent = text;
   chat.appendChild(div);
   
-  // Force layout recalc and ensure reliable scrolling
   setTimeout(() => {
     if (!chat) return;
-    
-    // Force layout recalculation
     const scrollHeight = chat.scrollHeight;
     const clientHeight = chat.clientHeight;
-    
-    // Only scroll if content exceeds container
     if (scrollHeight > clientHeight) {
       chat.scrollTo({
         top: scrollHeight,
@@ -44,19 +64,12 @@ function addMsg(text, who = 'assistant') {
 function updateLastMsg(extra) {
   if (chat.lastChild && chat.lastChild.classList.contains('assistant')) {
     chat.lastChild.textContent += extra;
-    
-    // Auto-scroll during streaming too
     setTimeout(() => {
       if (!chat) return;
       const {scrollHeight, clientHeight, scrollTop} = chat;
       const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
-      
-      // Only scroll if within 200px of bottom
       if (distanceFromBottom < 200) {
-        chat.scrollTo({
-          top: scrollHeight,
-          behavior: 'auto'
-        });
+        chat.scrollTo({ top: scrollHeight, behavior: 'auto' });
       }
     }, 0);
   }
@@ -68,15 +81,13 @@ function speakText(text) {
   speakQueue += text;
   if (!speaking) {
     speaking = true;
-  const utter = new SpeechSynthesisUtterance(speakQueue);
-  // Apply selected voice / pitch / rate
-  if (selectedVoice) utter.voice = selectedVoice;
-  const pitch = pitchControl ? parseFloat(pitchControl.value) : 1;
-  const rate = rateControl ? parseFloat(rateControl.value) : 1;
-  utter.lang = selectedVoice ? selectedVoice.lang || 'en-US' : 'en-US';
-  utter.rate = rate;
-  utter.pitch = pitch;
-    // Mute the voice input while assistant is speaking to avoid feedback loops
+    const utter = new SpeechSynthesisUtterance(speakQueue);
+    if (selectedVoice) utter.voice = selectedVoice;
+    const pitch = pitchControl ? parseFloat(pitchControl.value) : 1;
+    const rate = rateControl ? parseFloat(rateControl.value) : 1;
+    utter.lang = selectedVoice ? selectedVoice.lang || 'en-US' : 'en-US';
+    utter.rate = rate;
+    utter.pitch = pitch;
     utter.onstart = () => {
       if (statusEl) { statusEl.className = 'status speaking'; statusEl.textContent = 'Speaking'; }
       try { window.nova.muteVoice(); } catch (e) {}
@@ -99,7 +110,7 @@ async function sendPrompt() {
 
   addMsg(text, 'user');
   promptInput.value = '';
-  addMsg('', 'assistant'); // prepare empty for streaming
+  addMsg('', 'assistant');
 
   window.nova.ask(text, requestId);
 }
@@ -147,22 +158,15 @@ window.nova.onDelta(({ requestId, content }) => {
   updateLastMsg(content);
 });
 
-// Create a short summary suitable for speech from the full assistant text
 function summarizeForSpeech(fullText) {
   if (!fullText) return '';
-  // Split into sentences
-  const sentences = fullText.split(/(?<=[\.\?!])\s+/);
-  if (sentences.length >= 2) {
-    // Use first two sentences as concise summary
-    return (sentences[0] + ' ' + sentences[1]).trim();
-  }
-  // Fallback: if single long paragraph, take first 120 chars
+  const sentences = fullText.split(/(?<=[\.\?\!])\s+/);
+  if (sentences.length >= 2) return (sentences[0] + ' ' + sentences[1]).trim();
   if (fullText.length > 160) return fullText.slice(0, 160).trim() + '...';
   return fullText.trim();
 }
 
 window.nova.onEnd(() => {
-  // Request a high-quality summarization from the main process, then speak it
   try {
     const last = chat.lastChild;
     if (last && last.classList.contains('assistant')) {
@@ -170,13 +174,10 @@ window.nova.onEnd(() => {
       const requestId = Date.now().toString();
       window.nova.summarize(full, requestId);
     }
-  } catch (e) {
-    // ignore
-  }
+  } catch (e) {}
   if (!speaking && statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
 });
 
-// Receive a summary from main and speak it
 window.nova.onSummary(({ requestId, summary }) => {
   if (summary) speakText(summary);
 });
@@ -184,40 +185,53 @@ window.nova.onError(({ error }) => {
   updateLastMsg(`\n[Error: ${error}]`);
 });
 
-// Mic Support via Python backend
+// Mic Support (active only if mode allows it)
 let listening = false;
+function bindMicControls() {
+  micBtn.addEventListener('mousedown', () => {
+    if (inputMode === 'wake') return;
+    listening = true;
+    micBtn.classList.add('active');
+    try { window.nova.startVoice(); } catch (e) {}
+    if (statusEl) { statusEl.className = 'status listening'; statusEl.textContent = 'Listening'; }
+  });
 
-micBtn.addEventListener('mousedown', () => {
-  listening = true;
-  micBtn.classList.add('active');
-  try { window.nova.startVoice(); } catch (e) {}
-  if (statusEl) { statusEl.className = 'status listening'; statusEl.textContent = 'Listening'; }
-});
-
-micBtn.addEventListener('mouseup', () => {
-  listening = false;
-  micBtn.classList.remove('active');
-  try { window.nova.stopVoice(); } catch (e) {}
-  if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
-});
-
-// Ensure we stop recording if the pointer leaves the button while held
-micBtn.addEventListener('mouseleave', () => {
-  if (listening) {
+  micBtn.addEventListener('mouseup', () => {
+    if (inputMode === 'wake') return;
     listening = false;
     micBtn.classList.remove('active');
     try { window.nova.stopVoice(); } catch (e) {}
-  if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
-  }
-});
+    if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
+  });
+
+  micBtn.addEventListener('mouseleave', () => {
+    if (listening && inputMode !== 'wake') {
+      listening = false;
+      micBtn.classList.remove('active');
+      try { window.nova.stopVoice(); } catch (e) {}
+      if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
+    }
+  });
+}
+
+bindMicControls();
 
 // Receive transcript from Python
 window.nova.onVoice((transcript) => {
-  if (!transcript?.trim()) return; // Ignore empty transcripts
-  
+  if (!transcript?.trim()) return;
   promptInput.value = transcript;
   if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
   sendPrompt();
+});
+
+// Handle Wake Word
+window.nova.onWakeWord((word) => {
+  if (inputMode === 'mic') return; // ignore if mic-only mode
+  if (statusEl) {
+    statusEl.className = 'status listening';
+    statusEl.textContent = `Wake word detected: ${word}`;
+  }
+  try { window.nova.startVoice(); } catch (e) {}
 });
 
 // Window Controls
