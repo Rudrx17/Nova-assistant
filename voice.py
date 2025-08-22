@@ -23,15 +23,17 @@ ENERGY_THRESHOLD = 500.0
 MAX_SEGMENT_MS = 8000   # max utterance length
 SILENCE_LIMIT_MS = 500  # how long silence ends speech (ms)
 
-recording_enabled = True
+# ---- runtime state (controlled by UI via stdin) ----
+recording_enabled = True      # general gate for stream loop
 muted = False
+input_mode = "HYBRID"         # WAKE | MIC | HYBRID  (default HYBRID)
+mic_active = False            # true while user is pressing/using the mic
+stop_requested = False        # set when UI sends STOP to break current capture
+
 cmd_queue = queue.Queue()
 
 # ---- Wake Word (Porcupine) ----
-# Prefer reading key from env (.env -> PICOVOICE_ACCESS_KEY); fallback to inline.
 ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "").strip() or "PUT-YOUR-ACCESS-KEY-HERE"
-
-# Resolve the .ppn path relative to this file
 HERE = os.path.dirname(os.path.abspath(__file__))
 KEYWORD_PATH = os.path.join(HERE, "hey-nova_en_windows_v3_0_0.ppn")
 
@@ -45,28 +47,61 @@ except Exception as e:
     print(f"ERROR::Porcupine init failed: {e}", flush=True)
     sys.exit(1)
 
+# ----------------- command handling -----------------
 def stdin_watcher(q):
     for line in sys.stdin:
         if line:
             q.put(line.strip().upper())
 threading.Thread(target=stdin_watcher, args=(cmd_queue,), daemon=True).start()
 
+def pump_commands_nonblock():
+    """Process any pending commands quickly."""
+    try:
+        while True:
+            cmd = cmd_queue.get_nowait()
+            handle_command(cmd)
+    except queue.Empty:
+        pass
+
 def handle_command(cmd):
-    global recording_enabled, muted
+    global recording_enabled, muted, input_mode, mic_active, stop_requested
     logger.info(f"Processing command: {cmd}")
+
     if cmd == "START":
+        mic_active = True
         recording_enabled = True
+        stop_requested = False
         print("CMD::START", flush=True)
+
     elif cmd == "STOP":
+        mic_active = False
         recording_enabled = False
+        stop_requested = True
         print("CMD::STOP", flush=True)
+
     elif cmd == "MUTE":
         muted = True
         print("CMD::MUTE", flush=True)
+
     elif cmd == "UNMUTE":
         muted = False
         print("CMD::UNMUTE", flush=True)
 
+    elif cmd.startswith("MODE::"):
+        # MODE::MIC / MODE::WAKE / MODE::HYBRID
+        mode = cmd.split("::", 1)[1].strip()
+        if mode in ("MIC", "WAKE", "HYBRID"):
+            input_mode = mode
+            # reset any ongoing capture so mode switch takes effect immediately
+            mic_active = False
+            stop_requested = True
+            recording_enabled = False
+            print(f"MODE::{input_mode}", flush=True)
+            logger.info(f"Switched mode to {input_mode}")
+        else:
+            logger.warning(f"Unknown mode value: {mode}")
+
+# ----------------- utils -----------------
 def rms_energy(frame_i16: np.ndarray) -> float:
     return float(np.sqrt(np.mean(frame_i16.astype(np.float32) ** 2)))
 
@@ -87,30 +122,42 @@ def recognize_bytes(pcm_bytes: bytes) -> str | None:
             logger.error(f"Recognition error: {e}")
             return None
 
-# ---- Wake Word Listener ----
+# ----------------- wake word -----------------
 def listen_for_wake_word():
+    """Block until wake word is detected, or mode changes away from WAKE/HYBRID."""
+    print("STATE::WAITING_WAKE", flush=True)
     with sd.RawInputStream(samplerate=porcupine.sample_rate,
                            blocksize=porcupine.frame_length,
                            channels=1,
                            dtype='int16') as wake_audio:
         logger.info("Wake word engine running...")
         while True:
+            pump_commands_nonblock()
+            if input_mode == "MIC":    # mode switched, stop waiting
+                logger.info("Leaving wake wait (mode switched to MIC)")
+                return
             pcm = wake_audio.read(porcupine.frame_length)[0]
             pcm = struct.unpack_from("h" * porcupine.frame_length, pcm)
             keyword_index = porcupine.process(pcm)
             if keyword_index >= 0:
                 print("WAKEWORD::Hey Nova", flush=True)
-                return  # exit loop when detected
+                return  # exit when detected
 
-# ---- Transcription (after wake word) ----
-def stream_and_transcribe():
+# ----------------- transcription -----------------
+def stream_and_transcribe(one_shot: bool):
+    """
+    Capture speech, VAD-chunk, and send to recognizer.
+    If one_shot=True -> return after first utterance is emitted (or STOP).
+    """
+    global stop_requested
     buffer = []
     silence_frames = 0
     in_speech = False
     frames_in_segment = 0
+    segment_emitted = False
 
     def end_segment(reason=""):
-        nonlocal buffer, in_speech, silence_frames, frames_in_segment
+        nonlocal buffer, in_speech, silence_frames, frames_in_segment, segment_emitted
         if not buffer:
             return
         pcm = np.concatenate(buffer).tobytes()
@@ -118,6 +165,7 @@ def stream_and_transcribe():
         in_speech = False
         silence_frames = 0
         frames_in_segment = 0
+        segment_emitted = True
 
         def do_rec():
             logger.debug(f"Ending segment ({reason}), sending {len(pcm)} bytes to recognizer")
@@ -152,27 +200,57 @@ def stream_and_transcribe():
                 silence_frames += 1
                 if silence_frames * FRAME_MS > SILENCE_LIMIT_MS:
                     end_segment("silence")
-        return
 
-    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='int16', blocksize=FRAME_SAMPLES, callback=audio_callback):
-        logger.info("Listening for speech...")
+    print("STATE::LISTENING", flush=True)
+    with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='int16',
+                        blocksize=FRAME_SAMPLES, callback=audio_callback):
+        last_activity = time.time()
         while True:
-            try:
-                while True:
-                    cmd = cmd_queue.get_nowait()
-                    handle_command(cmd)
-            except queue.Empty:
-                pass
-            if not recording_enabled:
-                time.sleep(0.2)
-                continue
-            time.sleep(0.01)
+            pump_commands_nonblock()
+            if stop_requested:
+                logger.info("Stop requested; breaking capture")
+                stop_requested = False
+                break
 
+            # If a segment was emitted and we're in one-shot mode, exit after a brief idle
+            if one_shot and segment_emitted and not in_speech:
+                if time.time() - last_activity > 0.15:
+                    break
+
+            time.sleep(0.01)
+            last_activity = time.time()
+
+    print("STATE::IDLE", flush=True)
+
+# ----------------- main loop -----------------
 if __name__ == "__main__":
     try:
+        print("MODE::HYBRID", flush=True)  # default
         while True:
-            listen_for_wake_word()   # wait for Hey Nova
-            stream_and_transcribe()  # then transcribe
+            pump_commands_nonblock()
+
+            if input_mode == "WAKE":
+                # Only wake word can start a capture
+                listen_for_wake_word()
+                stream_and_transcribe(one_shot=True)
+
+            elif input_mode == "MIC":
+                # Only react to mic button; wait until START arrives
+                if mic_active:
+                    stream_and_transcribe(one_shot=True)
+                    mic_active = False   # reset until next START
+                else:
+                    time.sleep(0.05)
+
+            else:  # HYBRID
+                # If mic is pressed, do a one-shot capture; else wait for wake word
+                if mic_active:
+                    stream_and_transcribe(one_shot=True)
+                    mic_active = False
+                else:
+                    listen_for_wake_word()
+                    stream_and_transcribe(one_shot=True)
+
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
         print(f"ERROR::{e}", flush=True)

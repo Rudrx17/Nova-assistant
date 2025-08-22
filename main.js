@@ -221,3 +221,11 @@ ipcMain.on('voice:unmute', () => {
   voiceMuted = false;
   if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('UNMUTE\n');
 });
+
+// Generic command handler (MODE::XXX, START, STOP, etc.)
+ipcMain.on('voice:command', (_e, cmd) => {
+  if (pyProcess && pyProcess.stdin) {
+    pyProcess.stdin.write(cmd + '\n');
+    console.log('[Electron → Python]', cmd);
+  }
+});

@@ -1,23 +1,61 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+let transcriptQueue = [];
+let wakeWordQueue = [];
+let voiceHandler = null;
+let wakeHandler = null;
+
+// Listen for transcripts from Python
+ipcRenderer.on('voice:transcript', (_e, text) => {
+  if (voiceHandler) {
+    voiceHandler(text);
+  } else {
+    transcriptQueue.push(text);
+  }
+});
+
+// Listen for wake word events
+ipcRenderer.on('voice:wakeword', (_e, word) => {
+  if (wakeHandler) {
+    wakeHandler(word);
+  } else {
+    wakeWordQueue.push(word);
+  }
+});
+
 contextBridge.exposeInMainWorld('nova', {
+  // --- AI ---
   ask: (text, requestId) => ipcRenderer.send('ai:ask', { text, requestId }),
   onDelta: (cb) => ipcRenderer.on('ai:delta', (_e, data) => cb(data)),
   onEnd: (cb) => ipcRenderer.on('ai:end', (_e, data) => cb(data)),
   onError: (cb) => ipcRenderer.on('ai:error', (_e, data) => cb(data)),
+
+  // --- Window controls ---
   closeWindow: () => ipcRenderer.send('window:close'),
   minimizeWindow: () => ipcRenderer.send('window:minimize'),
-  onVoice: (cb) => ipcRenderer.on('voice:transcript', (_e, text) => cb(text)),
-  // Voice controls for push-to-talk and muting microphone during assistant speech
+
+  // --- Voice events ---
+  onVoice: (cb) => {
+    voiceHandler = cb;
+    while (transcriptQueue.length) cb(transcriptQueue.shift());
+  },
   startVoice: () => ipcRenderer.send('voice:start'),
   stopVoice: () => ipcRenderer.send('voice:stop'),
   muteVoice: () => ipcRenderer.send('voice:mute'),
   unmuteVoice: () => ipcRenderer.send('voice:unmute'),
 
-  // Summarization helper: request a short spoken summary of a full assistant response
-  summarize: (fullText, requestId) => ipcRenderer.send('ai:summarize', { text: fullText, requestId }),
-  onSummary: (cb) => ipcRenderer.on('ai:summary', (_e, data) => cb(data)),
+  // 🔥 NEW: Generic command bridge (START / STOP / MUTE / UNMUTE / MODE::XXX)
+  sendCommand: (cmd) => ipcRenderer.send('voice:command', cmd),
 
-  // Wake word event listener
-  onWakeWord: (cb) => ipcRenderer.on('voice:wakeword', (_e, word) => cb(word))
+  // --- Summarization ---
+  summarize: (fullText, requestId) =>
+    ipcRenderer.send('ai:summarize', { text: fullText, requestId }),
+  onSummary: (cb) =>
+    ipcRenderer.on('ai:summary', (_e, data) => cb(data)),
+
+  // --- Wake word ---
+  onWakeWord: (cb) => {
+    wakeHandler = cb;
+    while (wakeWordQueue.length) cb(wakeWordQueue.shift());
+  }
 });

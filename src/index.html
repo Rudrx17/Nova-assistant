@@ -11,6 +11,7 @@
 </head>
 <body>
   <div class="window" id="window">
+    <!-- Titlebar -->
     <header class="titlebar drag">
       <div class="avatar" aria-hidden="true">
         <div class="pulse"></div>
@@ -25,13 +26,16 @@
       </div>
     </header>
 
+    <!-- Main content -->
     <main class="content">
+      <!-- Quick suggestions -->
       <div class="suggestions no-drag">
         <button class="chip">Summarize screen</button>
         <button class="chip">Find action buttons</button>
         <button class="chip">Explain this error</button>
       </div>
 
+      <!-- Controls -->
       <div class="controls no-drag">
         <div class="control-item">
           <label for="voiceSelect">Voice</label>
@@ -45,19 +49,21 @@
           <label for="rateRange">Rate</label>
           <input id="rateRange" type="range" min="0.6" max="1.6" step="0.05" value="1">
         </div>
-        <!-- 🔥 Added Input Mode Selector -->
+        <!-- Input Mode Selector -->
         <div class="control-item">
           <label for="modeSelect">Input Mode</label>
           <select id="modeSelect">
             <option value="wake">Wake Word</option>
             <option value="mic">Mic Only</option>
-            <option value="hybrid">Hybrid</option>
+            <option value="hybrid" selected>Hybrid</option> <!-- ✅ Default -->
           </select>
         </div>
       </div>
 
+      <!-- Chat area -->
       <div class="chat" id="chat"></div>
 
+      <!-- Input bar -->
       <div class="inputbar no-drag">
         <button class="icon" id="micBtn" title="Hold to talk">🎤</button>
         <input id="prompt" type="text" placeholder="Ask anything…" autocomplete="off" aria-label="Prompt" />
