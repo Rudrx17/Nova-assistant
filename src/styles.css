@@ -84,7 +84,7 @@ body.light-theme .window {
   color: var(--muted);
 }
 body.light-theme .status {
-  background: rgba(0,0,0,0.04);
+  background: rgba(0,0,0,0.1);
 }
 
 .status.listening { background: rgba(75,163,255,0.15); color: var(--accent); box-shadow: 0 4px 18px rgba(75,163,255,0.12); }
@@ -113,7 +113,7 @@ body.light-theme .status.speaking {
   padding: 2px 6px;
 }
 body.light-theme .control-item select, body.light-theme .control-item input[type="range"] {
-  background: rgba(0,0,0,0.04);
+  background: rgba(0,0,0,0.1);
 }
 
 .control-item label { color: var(--muted); font-size:11px; }
@@ -126,10 +126,10 @@ body.light-theme .control-item select, body.light-theme .control-item input[type
 }
 .ctrl:hover { background: rgba(255,255,255,0.12); }
 body.light-theme .ctrl {
-  background: rgba(0,0,0,0.06); color: var(--text);
+  background: rgba(0,0,0,0.1); color: var(--text);
 }
 body.light-theme .ctrl:hover {
-  background: rgba(0,0,0,0.12);
+  background: rgba(0,0,0,0.15);
 }
 
 .content { display: flex; flex-direction: column; gap: 14px; padding: 10px 12px 12px; height: calc(100% - 60px); }
@@ -141,10 +141,10 @@ body.light-theme .ctrl:hover {
 }
 .chip:hover { color: var(--text); background: rgba(255,255,255,0.10); }
 body.light-theme .chip {
-  background: rgba(0,0,0,0.06); color: var(--muted);
+  background: rgba(0,0,0,0.1); color: var(--muted);
 }
 body.light-theme .chip:hover {
-  background: rgba(0,0,0,0.10); color: var(--text);
+  background: rgba(0,0,0,0.15); color: var(--text);
 }
 
 .chat {
@@ -168,7 +168,7 @@ body.light-theme .msg.user {
 
 .msg.assistant { align-self: flex-start; background: rgba(255,255,255,0.06); }
 body.light-theme .msg.assistant {
-  background: rgba(0,0,0,0.06);
+  background: rgba(0,0,0,0.1);
 }
 
 .inputbar {
@@ -176,7 +176,7 @@ body.light-theme .msg.assistant {
   background: rgba(255,255,255,0.04); border: 1px solid var(--glass-stroke); border-radius: 14px; padding: 6px 8px;
 }
 body.light-theme .inputbar {
-  background: rgba(0,0,0,0.04);
+  background: rgba(0,0,0,0.1);
 }
 
 /* 🎤 Mic button styling */
@@ -196,10 +196,10 @@ body.light-theme .inputbar {
   box-shadow: 0 0 10px rgba(75,163,255,0.5);
 }
 body.light-theme .icon {
-  background: rgba(0,0,0,0.06);
+  background: rgba(0,0,0,0.1);
 }
 body.light-theme .icon:hover {
-  background: rgba(0,123,255,0.15);
+  background: rgba(0,123,255,0.2);
   box-shadow: 0 0 10px rgba(0,123,255,0.5);
 }
 
@@ -209,7 +209,7 @@ body.light-theme .icon:hover {
   animation: pulse-mic 1.5s infinite;
 }
 body.light-theme .icon.listening {
-  background: rgba(0,123,255,0.25);
+  background: rgba(0,123,255,0.3);
   box-shadow: 0 0 18px rgba(0,123,255,0.8);
 }
 
@@ -230,7 +230,7 @@ body.light-theme .icon.listening {
 }
 .send:hover { background: rgba(255,255,255,0.12); }
 body.light-theme .send {
-  background: rgba(0,0,0,0.06);
+  background: rgba(0,0,0,0.1);
 }
 body.light-theme .send:hover {
   background: rgba(0,0,0,0.12);
