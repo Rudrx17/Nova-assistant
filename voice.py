@@ -37,10 +37,10 @@ FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)
 RECOG_TIMEOUT = 10
 
-vad = webrtcvad.Vad(2)  # 0–3 (3 = most aggressive)
+vad = webrtcvad.Vad(1)  # 0–3 (3 = most aggressive)
 ENERGY_THRESHOLD = 500.0
 MAX_SEGMENT_MS = 8000   # max utterance length
-SILENCE_LIMIT_MS = 500  # how long silence ends speech (ms)
+SILENCE_LIMIT_MS = 1000  # how long silence ends speech (ms)
 
 # ---- runtime state (controlled by UI via stdin) ----
 recording_enabled = True      # general gate for stream loop

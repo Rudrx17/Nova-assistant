@@ -6,6 +6,10 @@ const closeBtn = document.getElementById('closeBtn');
 const minBtn = document.getElementById('minBtn');
 const statusEl = document.getElementById('status');
 const modeSelect = document.getElementById('modeSelect');
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsPanel = document.getElementById('settings-panel');
+const closeSettingsBtn = document.getElementById('closeSettingsBtn');
+const themeSelect = document.getElementById('themeSelect');
 
 // Speech Synthesis setup
 let synth = window.speechSynthesis;
@@ -150,6 +154,26 @@ window.addEventListener('DOMContentLoaded', () => {
       selectedVoice = voices[parseInt(voiceSelect.value, 10)];
     });
   }
+
+  // Theme control
+  if (themeSelect) {
+    // Load saved theme
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme) {
+      document.body.classList.toggle('light-theme', savedTheme === 'light');
+      themeSelect.value = savedTheme;
+    } else {
+      // Default to dark if no preference saved
+      document.body.classList.remove('light-theme'); // Explicitly ensure dark theme
+      themeSelect.value = 'dark';
+    }
+
+    themeSelect.addEventListener('change', () => {
+      const selectedTheme = themeSelect.value;
+      document.body.classList.toggle('light-theme', selectedTheme === 'light');
+      localStorage.setItem('theme', selectedTheme);
+    });
+  }
 });
 
 // AI streaming handlers
@@ -214,6 +238,15 @@ window.aura.onWakeWord((word) => {
     statusEl.textContent = `Wake word detected: ${word}`;
   }
   try { window.aura.sendCommand("START"); } catch (e) {}
+});
+
+// Settings Panel
+settingsBtn.addEventListener('click', () => {
+  settingsPanel.classList.remove('hidden');
+});
+
+closeSettingsBtn.addEventListener('click', () => {
+  settingsPanel.classList.add('hidden');
 });
 
 // Window Controls

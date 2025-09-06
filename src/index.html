@@ -21,6 +21,7 @@
         <div id="status" class="status">Idle</div>
       </div>
       <div class="win-controls no-drag">
+        <button class="ctrl" id="settingsBtn" title="Settings">⚙️</button>
         <button class="ctrl" id="minBtn" title="Minimize">–</button>
         <button class="ctrl" id="closeBtn" title="Close">×</button>
       </div>
@@ -35,8 +36,24 @@
         <button class="chip">Explain this error</button>
       </div>
 
-      <!-- Controls -->
-      <div class="controls no-drag">
+      <!-- Chat area -->
+      <div class="chat" id="chat"></div>
+
+      <!-- Input bar -->
+      <div class="inputbar no-drag">
+        <button class="icon" id="micBtn" title="Hold to talk">🎤</button>
+        <input id="prompt" type="text" placeholder="Ask anything…" autocomplete="off" aria-label="Prompt" />
+        <button class="send" id="sendBtn" title="Send">↵</button>
+      </div>
+    </main>
+
+    <!-- Settings Panel -->
+    <div id="settings-panel" class="settings-panel hidden">
+      <div class="settings-header">
+        <h2>Settings</h2>
+        <button id="closeSettingsBtn" class="ctrl">×</button>
+      </div>
+      <div class="settings-content">
         <div class="control-item">
           <label for="voiceSelect">Voice</label>
           <select id="voiceSelect"></select>
@@ -49,27 +66,23 @@
           <label for="rateRange">Rate</label>
           <input id="rateRange" type="range" min="0.6" max="1.6" step="0.05" value="1">
         </div>
-        <!-- Input Mode Selector -->
         <div class="control-item">
           <label for="modeSelect">Input Mode</label>
           <select id="modeSelect">
             <option value="wake">Wake Word</option>
             <option value="mic">Mic Only</option>
-            <option value="hybrid" selected>Hybrid</option> <!-- ✅ Default -->
+            <option value="hybrid" selected>Hybrid</option>
+          </select>
+        </div>
+        <div class="control-item">
+          <label for="themeSelect">Theme</label>
+          <select id="themeSelect">
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
           </select>
         </div>
       </div>
-
-      <!-- Chat area -->
-      <div class="chat" id="chat"></div>
-
-      <!-- Input bar -->
-      <div class="inputbar no-drag">
-        <button class="icon" id="micBtn" title="Hold to talk">🎤</button>
-        <input id="prompt" type="text" placeholder="Ask anything…" autocomplete="off" aria-label="Prompt" />
-        <button class="send" id="sendBtn" title="Send">↵</button>
-      </div>
-    </main>
+    </div>
   </div>
 
   <script src="./renderer.js"></script>
