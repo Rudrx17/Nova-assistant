@@ -178,6 +178,31 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // AI streaming handlers
 window.aura.onDelta(({ content }) => updateLastMsg(content));
+
+// Function to handle system command suggestions from AI
+function handleSystemCommandSuggestion(aiResponse, requestId) {
+  const commandRegex = /Would you like me to (open notepad|open calculator|open paint|show desktop|lock computer)\?/i;
+  const match = aiResponse.match(commandRegex);
+
+  if (match && match[1]) {
+    const command = match[1].toLowerCase();
+    // Removed confirmation dialog
+    window.aura.runSystemCommand(command, requestId);
+    addMsg(`Executing: ${command}...`, 'assistant'); // Provide immediate feedback
+  }
+}
+
+// Listen for system command responses
+window.aura.onSystemCommandResponse(({ requestId, success, error, stdout, stderr }) => {
+  if (success) {
+    addMsg(`Command executed successfully!`, 'assistant');
+    if (stdout) addMsg(`Output: ${stdout}`, 'assistant');
+  } else {
+    addMsg(`Command failed: ${error}`, 'assistant');
+    if (stderr) addMsg(`Error details: ${stderr}`, 'assistant');
+  }
+});
+
 window.aura.onEnd(() => {
   try {
     const last = chat.lastChild;
@@ -185,6 +210,7 @@ window.aura.onEnd(() => {
       const full = last.textContent || '';
       const requestId = Date.now().toString();
       window.aura.summarize(full, requestId);
+      handleSystemCommandSuggestion(full, requestId); // Check for system command suggestions
     }
   } catch (e) {}
   if (!speaking && statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }

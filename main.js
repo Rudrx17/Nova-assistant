@@ -155,13 +155,35 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
     // Mute voice transcripts while assistant speaks to avoid feedback loop
     voiceMuted = true;
     if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('MUTE\n');
+
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    const result = await model.generateContentStream(text);
-    for await (const chunk of result.stream) {
-      const chunkText = chunk.text();
-      if (chunkText) event.sender.send('ai:delta', { requestId, content: chunkText });
+    const chatHistory = [
+      {
+        role: 'user',
+        parts: [{ text: "You are Aura, a helpful desktop assistant. You can open applications like Notepad, Calculator, and Paint. You can also show the desktop and lock the computer. When asked to perform these actions, respond with 'Would you like me to [action]?' For example, if asked to open Notepad, respond with 'Would you like me to open Notepad?'" }]
+      },
+      {
+        role: 'model',
+        parts: [{ text: 'Understood. I will respond with the suggested phrasing for system commands.' }]
+      },
+      {
+        role: 'user',
+        parts: [{ text: text }] // User's current message
+      }
+    ];
+
+    const result = await model.generateContent({
+      contents: chatHistory
+    });
+
+    const response = result.response;
+    const stream = response.text(); // Get the streamed text directly
+
+    for await (const chunk of stream) { // Iterate over the streamed text
+      if (chunk) event.sender.send('ai:delta', { requestId, content: chunk });
     }
-    event.sender.send('ai:end', { requestId });
+
+    event.sender.send('ai:end', { requestId }); // This line was missing
     // Unmute after a short delay so TTS finishes
     setTimeout(() => {
       voiceMuted = false;
@@ -198,7 +220,7 @@ ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
     let collected = '';
     for await (const chunk of result.stream) {
       const chunkText = chunk.text();
-      if (chunkText) collected += chunkText;
+      if (chunkText) event.sender.send('ai:delta', { requestId, content: chunkText });
     }
     const summary = collected.trim() || (text.split('.').slice(0,2).join('.')) || text.slice(0,160);
     event.sender.send('ai:summary', { requestId, summary });
@@ -229,5 +251,37 @@ ipcMain.on('voice:command', (_e, cmd) => {
   if (pyProcess && pyProcess.stdin) {
     pyProcess.stdin.write(cmd + '\n');
     console.log('[Electron → Python]', cmd);
+  }
+});
+
+// System command handler
+ipcMain.on('system:command', (event, { command, requestId }) => {
+  const COMMAND_WHITELIST = {
+    'open notepad': 'start notepad.exe',
+    'open calculator': 'start calc.exe',
+    'open paint': 'start mspaint.exe',
+    'show desktop': 'explorer.exe shell:::{3080F90D-D7AD-11D9-BD98-0000947B0257}',
+    'lock computer': 'rundll32.exe user32.dll,LockWorkStation'
+  };
+
+  const cmdToExecute = COMMAND_WHITELIST[command.toLowerCase()];
+
+  if (cmdToExecute) {
+    console.log(`[System Command] Executing: ${cmdToExecute}`);
+    require('child_process').exec(cmdToExecute, (error, stdout, stderr) => {
+      if (error) {
+        console.error(`[System Command] Error executing ${command}: ${error.message}`);
+        event.sender.send('system:command:response', { requestId, success: false, error: error.message });
+        return;
+      }
+      if (stderr) {
+        console.warn(`[System Command] Stderr for ${command}: ${stderr}`);
+      }
+      console.log(`[System Command] Successfully executed: ${command}`);
+      event.sender.send('system:command:response', { requestId, success: true, stdout: stdout, stderr: stderr });
+    });
+  } else {
+    console.warn(`[System Command] Attempted to execute unwhitelisted command: ${command}`);
+    event.sender.send('system:command:response', { requestId, success: false, error: 'Command not whitelisted.' });
   }
 });

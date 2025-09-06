@@ -57,5 +57,9 @@ contextBridge.exposeInMainWorld('aura', {
   onWakeWord: (cb) => {
     wakeHandler = cb;
     while (wakeWordQueue.length) cb(wakeWordQueue.shift());
-  }
+  },
+
+  // --- System Commands ---
+  runSystemCommand: (command, requestId) => ipcRenderer.send('system:command', { command, requestId }),
+  onSystemCommandResponse: (cb) => ipcRenderer.on('system:command:response', (_e, data) => cb(data))
 });
