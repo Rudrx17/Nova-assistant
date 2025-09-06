@@ -19,7 +19,7 @@ let voiceSelect = null;
 // Config: Default input mode
 let inputMode = 'hybrid'; // default mode
 updateInputModeUI();
-window.nova.sendCommand("MODE::HYBRID"); // ✅ Tell backend at startup
+window.aura.sendCommand("MODE::HYBRID"); // ✅ Tell backend at startup
 
 // Update UI and behavior based on input mode
 function updateInputModeUI() {
@@ -38,11 +38,11 @@ if (modeSelect) {
     updateInputModeUI();
 
     if (inputMode === 'mic') {
-      window.nova.sendCommand("MODE::MIC");
+      window.aura.sendCommand("MODE::MIC");
     } else if (inputMode === 'wake') {
-      window.nova.sendCommand("MODE::WAKE");
+      window.aura.sendCommand("MODE::WAKE");
     } else {
-      window.nova.sendCommand("MODE::HYBRID");
+      window.aura.sendCommand("MODE::HYBRID");
     }
   });
 }
@@ -89,13 +89,13 @@ function speakText(text) {
     utter.pitch = pitch;
     utter.onstart = () => {
       if (statusEl) { statusEl.className = 'status speaking'; statusEl.textContent = 'Speaking'; }
-      try { window.nova.muteVoice(); } catch (e) {}
+      try { window.aura.muteVoice(); } catch (e) {}
     };
     utter.onend = () => {
       speaking = false;
       speakQueue = "";
       if (statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
-      try { window.nova.unmuteVoice(); } catch (e) {}
+      try { window.aura.unmuteVoice(); } catch (e) {}
     };
     synth.speak(utter);
   }
@@ -111,7 +111,7 @@ async function sendPrompt() {
   promptInput.value = '';
   addMsg('', 'assistant');
 
-  window.nova.ask(text, requestId);
+  window.aura.ask(text, requestId);
 }
 
 sendBtn.addEventListener('click', sendPrompt);
@@ -153,20 +153,20 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 // AI streaming handlers
-window.nova.onDelta(({ content }) => updateLastMsg(content));
-window.nova.onEnd(() => {
+window.aura.onDelta(({ content }) => updateLastMsg(content));
+window.aura.onEnd(() => {
   try {
     const last = chat.lastChild;
     if (last && last.classList.contains('assistant')) {
       const full = last.textContent || '';
       const requestId = Date.now().toString();
-      window.nova.summarize(full, requestId);
+      window.aura.summarize(full, requestId);
     }
   } catch (e) {}
   if (!speaking && statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
 });
-window.nova.onSummary(({ summary }) => { if (summary) speakText(summary); });
-window.nova.onError(({ error }) => updateLastMsg(`\n[Error: ${error}]`));
+window.aura.onSummary(({ summary }) => { if (summary) speakText(summary); });
+window.aura.onError(({ error }) => updateLastMsg(`\n[Error: ${error}]`));
 
 // Mic Support
 let listening = false;
@@ -175,7 +175,7 @@ function bindMicControls() {
     if (inputMode === 'wake') return;
     listening = true;
     micBtn.classList.add('active');
-    try { window.nova.sendCommand("START"); } catch (e) {}
+    try { window.aura.sendCommand("START"); } catch (e) {}
     if (statusEl) { statusEl.className = 'status listening'; statusEl.textContent = 'Listening'; }
   });
 
@@ -183,7 +183,7 @@ function bindMicControls() {
     if (inputMode === 'wake') return;
     listening = false;
     micBtn.classList.remove('active');
-    try { window.nova.sendCommand("STOP"); } catch (e) {}
+    try { window.aura.sendCommand("STOP"); } catch (e) {}
     if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
   });
 
@@ -191,7 +191,7 @@ function bindMicControls() {
     if (listening && inputMode !== 'wake') {
       listening = false;
       micBtn.classList.remove('active');
-      try { window.nova.sendCommand("STOP"); } catch (e) {}
+      try { window.aura.sendCommand("STOP"); } catch (e) {}
       if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
     }
   });
@@ -199,7 +199,7 @@ function bindMicControls() {
 bindMicControls();
 
 // Receive transcript from Python
-window.nova.onVoice((transcript) => {
+window.aura.onVoice((transcript) => {
   if (!transcript?.trim()) return;
   promptInput.value = transcript;
   if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
@@ -207,15 +207,15 @@ window.nova.onVoice((transcript) => {
 });
 
 // Handle Wake Word
-window.nova.onWakeWord((word) => {
+window.aura.onWakeWord((word) => {
   if (inputMode === 'mic') return; // ignore in mic-only mode
   if (statusEl) {
     statusEl.className = 'status listening';
     statusEl.textContent = `Wake word detected: ${word}`;
   }
-  try { window.nova.sendCommand("START"); } catch (e) {}
+  try { window.aura.sendCommand("START"); } catch (e) {}
 });
 
 // Window Controls
-closeBtn.addEventListener('click', () => window.nova.closeWindow());
-minBtn.addEventListener('click', () => window.nova.minimizeWindow());
+closeBtn.addEventListener('click', () => window.aura.closeWindow());
+minBtn.addEventListener('click', () => window.aura.minimizeWindow());

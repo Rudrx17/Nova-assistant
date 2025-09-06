@@ -23,7 +23,7 @@ ipcRenderer.on('voice:wakeword', (_e, word) => {
   }
 });
 
-contextBridge.exposeInMainWorld('nova', {
+contextBridge.exposeInMainWorld('aura', {
   // --- AI ---
   ask: (text, requestId) => ipcRenderer.send('ai:ask', { text, requestId }),
   onDelta: (cb) => ipcRenderer.on('ai:delta', (_e, data) => cb(data)),

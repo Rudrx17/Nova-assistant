@@ -1,5 +1,5 @@
 {
-  "name": "nova-assistant",
+  "name": "aura-assistant",
   "version": "1.0.0",
   "description": "Frameless Windows AI assistant UI (Electron)",
   "main": "main.js",

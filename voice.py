@@ -1,16 +1,35 @@
 import os, sys, threading, queue, time, logging, concurrent.futures, struct
-import numpy as np
-import sounddevice as sd
-import speech_recognition as sr
-import webrtcvad
 import warnings
-import pvporcupine
 
 # Suppress pkg_resources deprecation warnings from webrtcvad
 warnings.filterwarnings("ignore", category=UserWarning)
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 logger = logging.getLogger("voice")
+
+def check_dependencies():
+    """Checks for required Python packages and provides instructions if any are missing."""
+    try:
+        import numpy
+        import sounddevice
+        import speech_recognition
+        import webrtcvad
+        import pvporcupine
+    except ImportError as e:
+        module_name = e.name
+        print(f"ERROR::Missing Python dependency: {module_name}", flush=True)
+        print(f"Please install it by running: pip install {module_name}", flush=True)
+        sys.exit(1)
+
+check_dependencies()
+
+# Now import the modules for real
+import numpy as np
+import sounddevice as sd
+import speech_recognition as sr
+import webrtcvad
+import pvporcupine
+
 
 recognizer = sr.Recognizer()
 SAMPLE_RATE = 16000
@@ -33,9 +52,14 @@ stop_requested = False        # set when UI sends STOP to break current capture
 cmd_queue = queue.Queue()
 
 # ---- Wake Word (Porcupine) ----
-ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "").strip() or "PUT-YOUR-ACCESS-KEY-HERE"
+ACCESS_KEY = os.getenv("PICOVOICE_ACCESS_KEY", "").strip()
+if not ACCESS_KEY:
+    print("ERROR::PICOVOICE_ACCESS_KEY environment variable not set.", flush=True)
+    print("Please get a free key from https://console.picovoice.ai/ and set it.", flush=True)
+    sys.exit(1)
+
 HERE = os.path.dirname(os.path.abspath(__file__))
-KEYWORD_PATH = os.path.join(HERE, "hey-nova_en_windows_v3_0_0.ppn")
+KEYWORD_PATH = os.path.join(HERE, "Hey-Aura_en_windows_v3_0_0.ppn")
 
 try:
     porcupine = pvporcupine.create(
@@ -46,6 +70,7 @@ except Exception as e:
     logger.error(f"Failed to init Porcupine. Check access key and .ppn path.\nKey set: {bool(ACCESS_KEY)}  Path exists: {os.path.exists(KEYWORD_PATH)}\n{e}")
     print(f"ERROR::Porcupine init failed: {e}", flush=True)
     sys.exit(1)
+
 
 # ----------------- command handling -----------------
 def stdin_watcher(q):
@@ -140,7 +165,7 @@ def listen_for_wake_word():
             pcm = struct.unpack_from("h" * porcupine.frame_length, pcm)
             keyword_index = porcupine.process(pcm)
             if keyword_index >= 0:
-                print("WAKEWORD::Hey Nova", flush=True)
+                print("WAKEWORD::Hey Aura", flush=True)
                 return  # exit when detected
 
 # ----------------- transcription -----------------

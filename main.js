@@ -65,11 +65,13 @@ function toggleWindow() {
 app.whenReady().then(() => {
   createWindow();
 
-  // ---- Python Voice Process (use .venv interpreter) ----
-  pyProcess = spawn(
-    path.join(__dirname, '.venv', 'Scripts', 'python.exe'),
-    [path.join(__dirname, 'voice.py')]
-  );
+  // ---- Python Voice Process (prefer .venv) ----
+  const venvPython = path.join(__dirname, '.venv', 'Scripts', 'python.exe');
+  const pythonExecutable = fs.existsSync(venvPython)
+    ? venvPython
+    : (process.platform === 'win32' ? 'python.exe' : 'python');
+
+  pyProcess = spawn(pythonExecutable, [path.join(__dirname, 'voice.py')]);
 
   pyProcess.stdout.on('data', (data) => {
     const text = data.toString();
@@ -107,7 +109,7 @@ app.whenReady().then(() => {
   const trayIconPath = path.join(__dirname, 'assets', 'tray.png');
   const trayIcon = fs.existsSync(trayIconPath) ? nativeImage.createFromPath(trayIconPath) : nativeImage.createEmpty();
   tray = new Tray(trayIcon);
-  tray.setToolTip('Nova Assistant');
+  tray.setToolTip('Aura Assistant');
   tray.on('click', toggleWindow);
 
   tray.setContextMenu(Menu.buildFromTemplate([
@@ -153,7 +155,7 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
     // Mute voice transcripts while assistant speaks to avoid feedback loop
     voiceMuted = true;
     if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('MUTE\n');
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const result = await model.generateContentStream(text);
     for await (const chunk of result.stream) {
       const chunkText = chunk.text();
@@ -191,7 +193,7 @@ ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
 
   try {
     const prompt = `Summarize the following assistant response into two concise sentences suitable for speaking aloud:\n\n${text}`;
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const result = await model.generateContentStream(prompt);
     let collected = '';
     for await (const chunk of result.stream) {
