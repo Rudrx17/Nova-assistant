@@ -182,6 +182,27 @@ window.addEventListener('DOMContentLoaded', () => {
       localStorage.setItem('theme', selectedTheme);
     });
   }
+
+  // UI Opacity control
+  const opacityRange = document.getElementById('opacityRange');
+  if (opacityRange) {
+    // Load saved opacity
+    const savedOpacity = localStorage.getItem('uiOpacity');
+    if (savedOpacity !== null) {
+      document.body.style.opacity = savedOpacity;
+      opacityRange.value = savedOpacity;
+    } else {
+      // Default to 1 if no preference saved
+      document.body.style.opacity = 1;
+      opacityRange.value = 1;
+    }
+
+    opacityRange.addEventListener('input', () => {
+      const selectedOpacity = opacityRange.value;
+      document.body.style.opacity = selectedOpacity;
+      localStorage.setItem('uiOpacity', selectedOpacity);
+    });
+  }
 });
 
 // AI streaming handlers
