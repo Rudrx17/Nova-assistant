@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -13,6 +13,10 @@ let win;
 let tray;
 let pyProcess;
 let voiceMuted = false; // when true, ignore transcripts
+let lastRequestTime = 0;
+const COOLDOWN_MS = 2000; // 2 seconds
+let lastScreenshot = null;
+let geminiChat = null;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -75,7 +79,6 @@ app.whenReady().then(() => {
 
   pyProcess.stdout.on('data', (data) => {
     const text = data.toString();
-    // Split into lines to avoid chunks that combine multiple messages (e.g. TRANSCRIPT:: + CMD::)
     const lines = text.split(/\r?\n/);
     for (const raw of lines) {
       const msg = raw.trim();
@@ -86,6 +89,9 @@ app.whenReady().then(() => {
       } else if (msg.startsWith("WAKEWORD::")) {
         const word = msg.replace("WAKEWORD::", "").trim();
         if (win) win.webContents.send('voice:wakeword', word);
+      } else if (msg.startsWith("SCREENSHOT::")) {
+        lastScreenshot = msg.replace("SCREENSHOT::", "").trim();
+        if (win) win.webContents.send('voice:screenshot_taken');
       } else {
         console.log("[Python]", msg);
       }
@@ -134,7 +140,14 @@ ipcMain.on('window:minimize', () => { if (win) win.minimize(); });
 ipcMain.on('ai:ask', async (event, { text, requestId }) => {
   if (!text) return;
 
-  // Mock mode
+  const now = Date.now();
+  if (now - lastRequestTime < COOLDOWN_MS) {
+    console.warn("Request throttled due to cooldown.");
+    event.sender.send('ai:error', { requestId, error: 'Too many requests. Please wait a moment.' });
+    return;
+  }
+  lastRequestTime = now;
+
   if (process.env.MOCK_MODE === 'true') {
     const fakeResponses = [
       "Sure! Here's what I found.",
@@ -150,41 +163,40 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
     return;
   }
 
-  // Real Gemini streaming
   try {
-    // Mute voice transcripts while assistant speaks to avoid feedback loop
     voiceMuted = true;
     if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('MUTE\n');
 
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    const chatHistory = [
-      {
-        role: 'user',
-        parts: [{ text: "You are Aura, a helpful desktop assistant. You can open applications like Notepad, Calculator, and Paint. You can also show the desktop and lock the computer. When asked to perform these actions, respond with 'Would you like me to [action]?' For example, if asked to open Notepad, respond with 'Would you like me to open Notepad?'" }]
-      },
-      {
-        role: 'model',
-        parts: [{ text: 'Understood. I will respond with the suggested phrasing for system commands.' }]
-      },
-      {
-        role: 'user',
-        parts: [{ text: text }] // User's current message
-      }
-    ];
 
-    const result = await model.generateContent({
-      contents: chatHistory
-    });
-
-    const response = result.response;
-    const stream = response.text(); // Get the streamed text directly
-
-    for await (const chunk of stream) { // Iterate over the streamed text
-      if (chunk) event.sender.send('ai:delta', { requestId, content: chunk });
+    if (!geminiChat) {
+      geminiChat = model.startChat({
+        history: [
+          {
+            role: 'user',
+            parts: [{ text: "You are Aura, a helpful desktop assistant..." }]
+          },
+          {
+            role: 'model',
+            parts: [{ text: 'Understood. I will respond with the suggested phrasing for system commands.' }]
+          },
+        ],
+      });
     }
 
-    event.sender.send('ai:end', { requestId }); // This line was missing
-    // Unmute after a short delay so TTS finishes
+    const userParts = [{ text }];
+    if (lastScreenshot) {
+      userParts.push({ inline_data: { mime_type: 'image/png', data: lastScreenshot } });
+      lastScreenshot = null;
+    }
+
+    const result = await geminiChat.sendMessageStream(userParts);
+
+    for await (const chunk of result.stream) {
+      if (chunk) event.sender.send('ai:delta', { requestId, content: chunk.text() });
+    }
+
+    event.sender.send('ai:end', { requestId });
     setTimeout(() => {
       voiceMuted = false;
       if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('UNMUTE\n');
@@ -202,11 +214,17 @@ ipcMain.on('ai:stop', (event, { requestId }) => {
   event.sender.send('ai:stopped', { requestId });
 });
 
-// Summarization handler: creates a short spoken summary from full assistant text
+// Summarization handler
 ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
   if (!text) return;
 
-  // Mock summarization
+  const now = Date.now();
+  if (now - lastRequestTime < COOLDOWN_MS) {
+    event.sender.send('ai:summary', { requestId, summary: text.split('.').slice(0,2).join('.') });
+    return;
+  }
+  lastRequestTime = now;
+
   if (process.env.MOCK_MODE === 'true') {
     const fakeSummary = 'Short summary: ' + (text.split('.').slice(0,2).join('.').slice(0,200) || text.slice(0,120));
     event.sender.send('ai:summary', { requestId, summary: fakeSummary });
@@ -214,13 +232,13 @@ ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
   }
 
   try {
-    const prompt = `Summarize the following assistant response into two concise sentences suitable for speaking aloud:\n\n${text}`;
+    const prompt = `Summarize this:\n\n${text}`;
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     const result = await model.generateContentStream(prompt);
     let collected = '';
     for await (const chunk of result.stream) {
       const chunkText = chunk.text();
-      if (chunkText) event.sender.send('ai:delta', { requestId, content: chunkText });
+      if (chunkText) collected += chunkText;
     }
     const summary = collected.trim() || (text.split('.').slice(0,2).join('.')) || text.slice(0,160);
     event.sender.send('ai:summary', { requestId, summary });
@@ -230,7 +248,69 @@ ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
   }
 });
 
-// Voice control handlers forwarded to Python helper via stdin
+// ---------- Gemini streaming (ai:askWithScreenshot) ----------
+ipcMain.on('ai:askWithScreenshot', async (event, { text, requestId }) => {
+  console.log(`[Electron] ai:askWithScreenshot received.`);
+  if (!text || !lastScreenshot) {
+    console.warn("[Electron] Missing text or screenshot.");
+    return;
+  }
+
+  const now = Date.now();
+  if (now - lastRequestTime < COOLDOWN_MS) {
+    event.sender.send('ai:error', { requestId, error: 'Too many requests. Please wait a moment.' });
+    return;
+  }
+  lastRequestTime = now;
+
+  if (process.env.MOCK_MODE === 'true') {
+    const fakeResponses = [
+      "Sure! Here's what I found with the screenshot.",
+      "This is a mock AI reply for testing with an image."
+    ];
+    for (let i = 0; i < fakeResponses.length; i++) {
+      await new Promise(r => setTimeout(r, 450));
+      event.sender.send('ai:delta', { requestId, content: fakeResponses[i] + ' ' });
+    }
+    event.sender.send('ai:end', { requestId });
+    return;
+  }
+
+  try {
+    voiceMuted = true;
+    if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('MUTE\n');
+
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+    if (!geminiChat) {
+      geminiChat = model.startChat({ history: [] });
+    }
+
+    const userParts = [
+      { text },
+      { inline_data: { mime_type: 'image/png', data: lastScreenshot } }
+    ];
+    lastScreenshot = null;
+
+    const result = await geminiChat.sendMessageStream(userParts);
+
+    for await (const chunk of result.stream) {
+      if (chunk) event.sender.send('ai:delta', { requestId, content: chunk.text() });
+    }
+
+    event.sender.send('ai:end', { requestId });
+    setTimeout(() => {
+      voiceMuted = false;
+      if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('UNMUTE\n');
+    }, 250);
+  } catch (err) {
+    console.error('Gemini API Error:', err);
+    event.sender.send('ai:error', { requestId, error: err.message || String(err) });
+    voiceMuted = false;
+  }
+});
+
+// Voice control handlers
 ipcMain.on('voice:start', () => {
   if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('START\n');
 });
@@ -246,11 +326,70 @@ ipcMain.on('voice:unmute', () => {
   if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('UNMUTE\n');
 });
 
-// Generic command handler (MODE::XXX, START, STOP, etc.)
-ipcMain.on('voice:command', (_e, cmd) => {
+// Generic command handler (READ_SCREEN fixed for high resolution)
+ipcMain.on('voice:command', async (_e, cmd) => {
   if (pyProcess && pyProcess.stdin) {
     pyProcess.stdin.write(cmd + '\n');
     console.log('[Electron → Python]', cmd);
+  }
+
+  if (cmd === "READ_SCREEN") {
+    console.log("[Electron] Attempting screen capture...");
+    try {
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("desktopCapturer.getSources() timed out.")), 10000)
+      );
+
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const { width, height } = primaryDisplay.size;
+
+      const sourcesPromise = desktopCapturer.getSources({
+        types: ['screen'],
+        thumbnailSize: { width, height }  // 🔥 full resolution
+      });
+
+      const sources = await Promise.race([sourcesPromise, timeoutPromise]);
+
+      console.log("[Electron] desktopCapturer.getSources() returned.");
+
+      const primaryScreenSource = sources.find(
+        source => source.display_id === String(primaryDisplay.id)
+      );
+
+      if (primaryScreenSource) {
+        console.log("[Electron] Primary screen source found. Capturing thumbnail...");
+        const thumbnail = primaryScreenSource.thumbnail.toPNG(); // full res
+        console.log("[Electron] Thumbnail captured. Converting to base64...");
+        lastScreenshot = thumbnail.toString('base64');
+        console.log(`[Electron] lastScreenshot set. Length: ${lastScreenshot.length}`);
+        fs.writeFileSync(
+          path.join(app.getPath('temp'), 'aura_screenshot_ready.json'),
+          JSON.stringify({ ready: true })
+        );
+        console.log("[Electron] Signal file written.");
+      } else {
+        console.error("[Electron] Primary screen source not found.");
+      }
+    } catch (error) {
+      console.error("[Electron] Error capturing screen:", error);
+      if (win) {
+        win.webContents.send('ai:error', { requestId: 'screenshot', error: `Screen capture failed: ${error.message}` });
+      }
+    }
+  }
+});
+
+// Notify renderer that screenshot has been taken (via file polling)
+ipcMain.handle('voice:check_screenshot_signal', () => {
+  const signalFilePath = path.join(app.getPath('temp'), 'aura_screenshot_ready.json');
+  return fs.existsSync(signalFilePath);
+});
+
+ipcMain.on('voice:clear_screenshot_signal', () => {
+  const signalFilePath = path.join(app.getPath('temp'), 'aura_screenshot_ready.json');
+  if (fs.existsSync(signalFilePath)) {
+    fs.unlinkSync(signalFilePath);
+    console.log("[Electron] Screenshot signal file cleared.");
   }
 });
 
@@ -270,18 +409,12 @@ ipcMain.on('system:command', (event, { command, requestId }) => {
     console.log(`[System Command] Executing: ${cmdToExecute}`);
     require('child_process').exec(cmdToExecute, (error, stdout, stderr) => {
       if (error) {
-        console.error(`[System Command] Error executing ${command}: ${error.message}`);
         event.sender.send('system:command:response', { requestId, success: false, error: error.message });
         return;
       }
-      if (stderr) {
-        console.warn(`[System Command] Stderr for ${command}: ${stderr}`);
-      }
-      console.log(`[System Command] Successfully executed: ${command}`);
-      event.sender.send('system:command:response', { requestId, success: true, stdout: stdout, stderr: stderr });
+      event.sender.send('system:command:response', { requestId, success: true, stdout, stderr });
     });
   } else {
-    console.warn(`[System Command] Attempted to execute unwhitelisted command: ${command}`);
     event.sender.send('system:command:response', { requestId, success: false, error: 'Command not whitelisted.' });
   }
 });
