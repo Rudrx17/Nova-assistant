@@ -13,6 +13,8 @@ let win;
 let tray;
 let pyProcess;
 let voiceMuted = false; // when true, ignore transcripts
+let lastRequestTime = 0;
+const COOLDOWN_MS = 2000; // 2 seconds
 
 function createWindow() {
   win = new BrowserWindow({
@@ -134,6 +136,14 @@ ipcMain.on('window:minimize', () => { if (win) win.minimize(); });
 ipcMain.on('ai:ask', async (event, { text, requestId }) => {
   if (!text) return;
 
+  const now = Date.now();
+  if (now - lastRequestTime < COOLDOWN_MS) {
+    console.warn("Request throttled due to cooldown.");
+    event.sender.send('ai:error', { requestId, error: 'Too many requests. Please wait a moment.' });
+    return;
+  }
+  lastRequestTime = now;
+
   // Mock mode
   if (process.env.MOCK_MODE === 'true') {
     const fakeResponses = [
@@ -205,6 +215,15 @@ ipcMain.on('ai:stop', (event, { requestId }) => {
 // Summarization handler: creates a short spoken summary from full assistant text
 ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
   if (!text) return;
+
+  const now = Date.now();
+  if (now - lastRequestTime < COOLDOWN_MS) {
+    console.warn("Summarize request throttled due to cooldown.");
+    // Don't send an error for this, just fail silently or send a fallback
+    event.sender.send('ai:summary', { requestId, summary: text.split('.').slice(0,2).join('.') });
+    return;
+  }
+  lastRequestTime = now;
 
   // Mock summarization
   if (process.env.MOCK_MODE === 'true') {

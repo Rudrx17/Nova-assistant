@@ -29,6 +29,7 @@ import sounddevice as sd
 import speech_recognition as sr
 import webrtcvad
 import pvporcupine
+from pydub import AudioSegment
 
 
 recognizer = sr.Recognizer()
@@ -37,10 +38,13 @@ FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)
 RECOG_TIMEOUT = 10
 
-vad = webrtcvad.Vad(1)  # 0–3 (3 = most aggressive)
-ENERGY_THRESHOLD = 500.0
-MAX_SEGMENT_MS = 8000   # max utterance length
-SILENCE_LIMIT_MS = 1000  # how long silence ends speech (ms)
+vad = webrtcvad.Vad(2)  # 0–3 (3 = most aggressive)
+ENERGY_THRESHOLD = 300.0      # Initial value, will be adapted
+MAX_SEGMENT_MS = 8000         # Max utterance length
+SILENCE_LIMIT_MS = 2500       # How long silence ends speech (ms)
+UTTERANCE_TIMEOUT_MS = 5000   # End listening after this much silence
+NOISE_FLOOR_SAMPLES = 100     # Number of frames to avg for noise floor
+NOISE_ADJUST_SPEED = 0.1      # How quickly to adapt to new noise levels
 
 # ---- runtime state (controlled by UI via stdin) ----
 recording_enabled = True      # general gate for stream loop
@@ -48,6 +52,7 @@ muted = False
 input_mode = "HYBRID"         # WAKE | MIC | HYBRID  (default HYBRID)
 mic_active = False            # true while user is pressing/using the mic
 stop_requested = False        # set when UI sends STOP to break current capture
+ambient_energy = ENERGY_THRESHOLD # Start with default
 
 cmd_queue = queue.Queue()
 
@@ -124,7 +129,7 @@ def handle_command(cmd):
             print(f"MODE::{input_mode}", flush=True)
             logger.info(f"Switched mode to {input_mode}")
         else:
-            logger.warning(f"Unknown mode value: {mode}")
+            logger.logger.warning(f"Unknown mode value: {mode}")
 
 # ----------------- utils -----------------
 def rms_energy(frame_i16: np.ndarray) -> float:
@@ -169,20 +174,21 @@ def listen_for_wake_word():
                 return  # exit when detected
 
 # ----------------- transcription -----------------
-def stream_and_transcribe(one_shot: bool):
+def stream_and_transcribe():
     """
     Capture speech, VAD-chunk, and send to recognizer.
-    If one_shot=True -> return after first utterance is emitted (or STOP).
+    Listens continuously until UTTERANCE_TIMEOUT_MS of silence is detected.
     """
-    global stop_requested
+    global stop_requested, ambient_energy
     buffer = []
     silence_frames = 0
     in_speech = False
     frames_in_segment = 0
-    segment_emitted = False
+    noise_samples = []
+    last_speech_time = time.time()
 
     def end_segment(reason=""):
-        nonlocal buffer, in_speech, silence_frames, frames_in_segment, segment_emitted
+        nonlocal buffer, in_speech, silence_frames, frames_in_segment
         if not buffer:
             return
         pcm = np.concatenate(buffer).tobytes()
@@ -190,7 +196,6 @@ def stream_and_transcribe(one_shot: bool):
         in_speech = False
         silence_frames = 0
         frames_in_segment = 0
-        segment_emitted = True
 
         def do_rec():
             logger.debug(f"Ending segment ({reason}), sending {len(pcm)} bytes to recognizer")
@@ -201,9 +206,15 @@ def stream_and_transcribe(one_shot: bool):
         threading.Thread(target=do_rec, daemon=True).start()
 
     def audio_callback(indata, frames, t, status):
-        nonlocal buffer, in_speech, silence_frames, frames_in_segment
+        nonlocal buffer, in_speech, silence_frames, frames_in_segment, noise_samples, last_speech_time
+        global ambient_energy
         if status:
             logger.debug(f"Audio status: {status}")
+
+        # Pydub low-pass filter
+        audio_segment = AudioSegment(indata.tobytes(), frame_rate=SAMPLE_RATE, sample_width=indata.dtype.itemsize, channels=1)
+        filtered_segment = audio_segment.low_pass_filter(1000) # 1000 Hz cutoff
+        indata = np.array(filtered_segment.get_array_of_samples())
 
         data = indata.copy().reshape(-1)
         for i in range(0, len(data), FRAME_SAMPLES):
@@ -212,24 +223,34 @@ def stream_and_transcribe(one_shot: bool):
                 continue
             frame_i16 = frame.astype(np.int16)
             energy = rms_energy(frame_i16)
-            is_speech = energy >= ENERGY_THRESHOLD and vad.is_speech(frame_i16.tobytes(), SAMPLE_RATE)
+            
+            speech_threshold = ambient_energy * 1.2
+            is_speech = energy > speech_threshold and vad.is_speech(frame_i16.tobytes(), SAMPLE_RATE)
 
             if is_speech:
+                last_speech_time = time.time()
                 buffer.append(frame_i16)
                 in_speech = True
                 silence_frames = 0
                 frames_in_segment += 1
                 if frames_in_segment * FRAME_MS >= MAX_SEGMENT_MS:
                     end_segment("max length reached")
-            elif in_speech:
-                silence_frames += 1
-                if silence_frames * FRAME_MS > SILENCE_LIMIT_MS:
-                    end_segment("silence")
+            else:
+                noise_samples.append(energy)
+                if len(noise_samples) >= NOISE_FLOOR_SAMPLES:
+                    new_noise_floor = np.mean(noise_samples)
+                    ambient_energy = (ambient_energy * (1 - NOISE_ADJUST_SPEED)) + (new_noise_floor * NOISE_ADJUST_SPEED)
+                    noise_samples = []
+                    logger.debug(f"Ambient energy updated to: {ambient_energy:.2f}")
+
+                if in_speech:
+                    silence_frames += 1
+                    if silence_frames * FRAME_MS > SILENCE_LIMIT_MS:
+                        end_segment("silence")
 
     print("STATE::LISTENING", flush=True)
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='int16',
                         blocksize=FRAME_SAMPLES, callback=audio_callback):
-        last_activity = time.time()
         while True:
             pump_commands_nonblock()
             if stop_requested:
@@ -237,13 +258,11 @@ def stream_and_transcribe(one_shot: bool):
                 stop_requested = False
                 break
 
-            # If a segment was emitted and we're in one-shot mode, exit after a brief idle
-            if one_shot and segment_emitted and not in_speech:
-                if time.time() - last_activity > 0.15:
-                    break
+            if time.time() - last_speech_time > UTTERANCE_TIMEOUT_MS / 1000:
+                logger.info("Utterance timeout; breaking capture")
+                break
 
             time.sleep(0.01)
-            last_activity = time.time()
 
     print("STATE::IDLE", flush=True)
 
@@ -255,26 +274,23 @@ if __name__ == "__main__":
             pump_commands_nonblock()
 
             if input_mode == "WAKE":
-                # Only wake word can start a capture
                 listen_for_wake_word()
-                stream_and_transcribe(one_shot=True)
+                stream_and_transcribe()
 
             elif input_mode == "MIC":
-                # Only react to mic button; wait until START arrives
                 if mic_active:
-                    stream_and_transcribe(one_shot=True)
-                    mic_active = False   # reset until next START
+                    stream_and_transcribe()
+                    mic_active = False
                 else:
                     time.sleep(0.05)
 
             else:  # HYBRID
-                # If mic is pressed, do a one-shot capture; else wait for wake word
                 if mic_active:
-                    stream_and_transcribe(one_shot=True)
+                    stream_and_transcribe()
                     mic_active = False
                 else:
                     listen_for_wake_word()
-                    stream_and_transcribe(one_shot=True)
+                    stream_and_transcribe()
 
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
