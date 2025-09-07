@@ -19,11 +19,9 @@ const pulseEl = document.querySelector('.pulse');
 function updateAvatarState(state) {
   if (!avatarEl || !pulseEl) return;
 
-  // Remove all state classes first
   avatarEl.classList.remove('listening', 'thinking', 'speaking');
   pulseEl.classList.remove('listening', 'thinking', 'speaking');
 
-  // Add the new state class if not idle
   if (state !== 'idle') {
     avatarEl.classList.add(state);
     pulseEl.classList.add(state);
@@ -41,11 +39,10 @@ let voiceSelect = null;
 let screenshotPending = false;
 
 // Config: Default input mode
-let inputMode = 'hybrid'; // default mode
+let inputMode = 'hybrid';
 updateInputModeUI();
 try { window.aura.sendCommand("MODE::HYBRID"); } catch (e) {}
 
-// Update UI and behavior based on input mode
 function updateInputModeUI() {
   if (!micBtn) return;
   if (inputMode === 'wake') {
@@ -55,7 +52,6 @@ function updateInputModeUI() {
   }
 }
 
-// Handle dropdown change
 if (modeSelect) {
   modeSelect.value = inputMode;
   modeSelect.addEventListener('change', () => {
@@ -74,43 +70,24 @@ if (modeSelect) {
   });
 }
 
-/**
- * Safe, minimal markdown renderer:
- * - **bold** then *italics* / _italics_ (without conflict)
- * - Groups consecutive list items into <ul> / <ol>
- * - Applies <br> AFTER list handling
- */
+// --- Markdown renderer ---
 function renderMarkdown(text) {
   if (!text) return "";
 
-  // Escape HTML to prevent injection
   let html = text.replace(/[&<>]/g, t => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[t]));
-
-  // Bold (**text**)
   html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-
-  // Italics (*text* or _text_)
   html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
   html = html.replace(/_(.+?)_/g, "<em>$1</em>");
-
-  // Unordered lists (*, -, +)
   html = html.replace(/^[ \t]*[\*\-\+][ \t]+(.+)$/gm, "<li>$1</li>");
   html = html.replace(/(?:<li>[\s\S]*?<\/li>\s*)+/g, m => `<ul>${m}</ul>`);
-
-  // Ordered lists (1., 2., etc.)
   html = html.replace(/^[ \t]*\d+[.)][ \t]+(.+)$/gm, "<li>$1</li>");
   html = html.replace(/(?:<li>[\s\S]*?<\/li>\s*)+/g, m => `<ol>${m}</ol>`);
-
-  // Paragraphs (preserve line breaks only if not inside lists)
   html = html.replace(/\n(?!<\/?(ul|ol|li)>)/g, "<br>");
 
   return html;
 }
 
-
-
-
-// Add message to chat
+// --- Chat helpers ---
 function addMsg(text, who = 'assistant') {
   if (!chat) return;
   const div = document.createElement('div');
@@ -123,7 +100,6 @@ function addMsg(text, who = 'assistant') {
   }, 10);
 }
 
-// Update last assistant message
 function updateLastMsg(extra) {
   if (chat?.lastChild && chat.lastChild.classList.contains('assistant')) {
     chat.lastChild.innerHTML += renderMarkdown(extra);
@@ -133,7 +109,7 @@ function updateLastMsg(extra) {
   }
 }
 
-// Speak text (keeps your existing queue semantics)
+// --- Speech synthesis ---
 function speakText(text) {
   if (!synth || !text) return;
   speakQueue += text;
@@ -161,7 +137,7 @@ function speakText(text) {
   }
 }
 
-// Send prompt to AI
+// --- Prompt handling ---
 async function sendPrompt() {
   const text = (promptInput?.value || '').trim();
   if (!text || !promptInput) return;
@@ -193,7 +169,7 @@ if (promptInput) {
   });
 }
 
-// Initialize voice controls + theme + opacity
+// --- UI init ---
 window.addEventListener('DOMContentLoaded', () => {
   voiceSelect = document.getElementById('voiceSelect');
   pitchControl = document.getElementById('pitchRange');
@@ -223,14 +199,13 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Theme control
   if (themeSelect) {
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme) {
       document.body.classList.toggle('light-theme', savedTheme === 'light');
       themeSelect.value = savedTheme;
     } else {
-      document.body.classList.remove('light-theme'); // default dark
+      document.body.classList.remove('light-theme');
       themeSelect.value = 'dark';
     }
 
@@ -241,7 +216,6 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // UI Opacity control
   const opacityRange = document.getElementById('opacityRange');
   if (opacityRange) {
     const savedOpacity = localStorage.getItem('uiOpacity');
@@ -256,40 +230,10 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// AI streaming handlers
+// --- AI streaming handlers ---
 if (window.aura?.onDelta) {
   window.aura.onDelta(({ content }) => updateLastMsg(content));
 }
-
-// Function to handle system command suggestions from AI
-function handleSystemCommandSuggestion(aiResponse, requestId) {
-  const commandRegex = /Would you like me to (open notepad|open calculator|open paint|show desktop|lock computer)\?/i;
-  const match = aiResponse.match(commandRegex);
-
-  if (match && match[1]) {
-    const command = match[1].toLowerCase();
-    try {
-      window.aura.runSystemCommand(command, requestId);
-      addMsg(`Executing: ${command}...`, 'assistant');
-    } catch (e) {
-      addMsg(`Command failed to start: ${e?.message || e}`, 'assistant');
-    }
-  }
-}
-
-// Listen for system command responses
-if (window.aura?.onSystemCommandResponse) {
-  window.aura.onSystemCommandResponse(({ requestId, success, error, stdout, stderr }) => {
-    if (success) {
-      addMsg(`Command executed successfully!`, 'assistant');
-      if (stdout) addMsg(`Output: ${stdout}`, 'assistant');
-    } else {
-      addMsg(`Command failed: ${error}`, 'assistant');
-      if (stderr) addMsg(`Error details: ${stderr}`, 'assistant');
-    }
-  });
-}
-
 if (window.aura?.onEnd) {
   window.aura.onEnd(() => {
     try {
@@ -305,7 +249,6 @@ if (window.aura?.onEnd) {
     if (!speaking) updateAvatarState('idle');
   });
 }
-
 if (window.aura?.onSummary) {
   window.aura.onSummary(({ summary }) => { if (summary) speakText(summary); });
 }
@@ -313,7 +256,35 @@ if (window.aura?.onError) {
   window.aura.onError(({ error }) => updateLastMsg(`\n[Error: ${error}]`));
 }
 
-// Read Screen Button
+// --- System command suggestion ---
+function handleSystemCommandSuggestion(aiResponse, requestId) {
+  const commandRegex = /Would you like me to (open notepad|open calculator|open paint|show desktop|lock computer)\?/i;
+  const match = aiResponse.match(commandRegex);
+
+  if (match && match[1]) {
+    const command = match[1].toLowerCase();
+    try {
+      window.aura.runSystemCommand(command, requestId);
+      addMsg(`Executing: ${command}...`, 'assistant');
+    } catch (e) {
+      addMsg(`Command failed to start: ${e?.message || e}`, 'assistant');
+    }
+  }
+}
+
+if (window.aura?.onSystemCommandResponse) {
+  window.aura.onSystemCommandResponse(({ requestId, success, error, stdout, stderr }) => {
+    if (success) {
+      addMsg(`Command executed successfully!`, 'assistant');
+      if (stdout) addMsg(`Output: ${stdout}`, 'assistant');
+    } else {
+      addMsg(`Command failed: ${error}`, 'assistant');
+      if (stderr) addMsg(`Error details: ${stderr}`, 'assistant');
+    }
+  });
+}
+
+// --- Read Screen button ---
 if (readScreenBtn) {
   readScreenBtn.addEventListener('click', () => {
     try { window.aura.sendCommand("READ_SCREEN"); } catch (e) {}
@@ -329,6 +300,8 @@ if (readScreenBtn) {
             addMsg("Screenshot taken. What would you like to ask about it?", 'assistant');
             promptInput?.focus();
             try { window.aura.clearScreenshotSignal(); } catch (e) {}
+
+            
           }
         }
       } catch (e) {
@@ -339,7 +312,7 @@ if (readScreenBtn) {
   });
 }
 
-// Mic Support
+// --- Mic controls ---
 let listening = false;
 function bindMicControls() {
   if (!micBtn) return;
@@ -374,7 +347,7 @@ function bindMicControls() {
 }
 bindMicControls();
 
-// Receive transcript from Python
+// --- Voice transcript ---
 if (window.aura?.onVoice) {
   window.aura.onVoice((transcript) => {
     if (!transcript?.trim() || !promptInput) return;
@@ -385,10 +358,10 @@ if (window.aura?.onVoice) {
   });
 }
 
-// Handle Wake Word
+// --- Wake word ---
 if (window.aura?.onWakeWord) {
   window.aura.onWakeWord((word) => {
-    if (inputMode === 'mic') return; // ignore in mic-only mode
+    if (inputMode === 'mic') return;
     if (statusEl) {
       statusEl.className = 'status listening';
       statusEl.textContent = `Wake word detected: ${word}`;
@@ -398,7 +371,7 @@ if (window.aura?.onWakeWord) {
   });
 }
 
-// Settings Panel
+// --- Settings panel ---
 if (settingsBtn && settingsPanel && closeSettingsBtn) {
   settingsBtn.addEventListener('click', () => {
     settingsPanel.classList.remove('hidden');
@@ -409,6 +382,6 @@ if (settingsBtn && settingsPanel && closeSettingsBtn) {
   });
 }
 
-// Window Controls
+// --- Window controls ---
 if (closeBtn) closeBtn.addEventListener('click', () => { try { window.aura.closeWindow(); } catch (e) {} });
 if (minBtn) minBtn.addEventListener('click', () => { try { window.aura.minimizeWindow(); } catch (e) {} });

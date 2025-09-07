@@ -45,7 +45,7 @@ contextBridge.exposeInMainWorld('aura', {
   muteVoice: () => ipcRenderer.send('voice:mute'),
   unmuteVoice: () => ipcRenderer.send('voice:unmute'),
 
-  // 🔥 NEW: Generic command bridge (START / STOP / MUTE / UNMUTE / MODE::XXX)
+  // 🔥 Generic command bridge (START / STOP / MUTE / UNMUTE / MODE::XXX)
   sendCommand: (cmd) => ipcRenderer.send('voice:command', cmd),
 
   // --- Summarization ---
@@ -63,6 +63,9 @@ contextBridge.exposeInMainWorld('aura', {
   // --- Screenshot Signaling (File-based) ---
   checkScreenshotSignal: () => ipcRenderer.invoke('voice:check_screenshot_signal'),
   clearScreenshotSignal: () => ipcRenderer.send('voice:clear_screenshot_signal'),
+
+  // 🔥 NEW: Screenshot Data
+  getLastScreenshot: () => ipcRenderer.invoke('voice:get_last_screenshot'),
 
   // --- System Commands ---
   runSystemCommand: (command, requestId) => ipcRenderer.send('system:command', { command, requestId }),
