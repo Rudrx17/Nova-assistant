@@ -97,9 +97,76 @@ body.light-theme .status.thinking {
   background: rgba(255,193,7,0.12); color: #ffc107; box-shadow: 0 4px 18px rgba(255,193,7,0.08);
 }
 
-.status.speaking { background: rgba(0,200,120,0.12); color: #62d58a; box-shadow: 0 4px 18px rgba(98,213,138,0.08); }
+.status.speaking { background: rgba(255,255,255,0.12); color: #FFFFFF; box-shadow: 0 4px 18px rgba(98,213,138,0.08); }
 body.light-theme .status.speaking {
-  background: rgba(40,167,69,0.12); color: #28a745; box-shadow: 0 4px 18px rgba(40,167,69,0.08);
+  background: rgba(255,255,255,0.12); color: #FFFFFF; box-shadow: 0 4px 18px rgba(255,255,255,0.08);
+}
+
+/* New Avatar/Pulse States */
+.avatar.listening {
+  box-shadow: 0 0 15px rgba(75,163,255,0.6), 0 0 30px rgba(75,163,255,0.4);
+  animation: pulse-glow-accent 1.5s infinite alternate;
+}
+.avatar.thinking {
+  box-shadow: 0 0 15px rgba(255,215,0,0.6), 0 0 30px rgba(255,215,0,0.4);
+  animation: pulse-glow-thinking 1.8s infinite alternate;
+}
+.avatar.speaking {
+  box-shadow: 0 0 15px rgba(255,255,255,0.6), 0 0 30px rgba(255,255,255,0.4);
+  animation: pulse-glow-speaking 1.2s infinite alternate;
+}
+
+/* Light theme adjustments for avatar glows */
+body.light-theme .avatar.listening {
+  box-shadow: 0 0 15px rgba(0,123,255,0.6), 0 0 30px rgba(0,123,255,0.4);
+}
+body.light-theme .avatar.thinking {
+  box-shadow: 0 0 15px rgba(255,193,7,0.6), 0 0 30px rgba(255,193,7,0.4);
+}
+body.light-theme .avatar.speaking {
+  box-shadow: 0 0 15px rgba(255,255,255,0.6), 0 0 30px rgba(255,255,255,0.4);
+}
+
+/* Pulse specific animations */
+.pulse.listening {
+  animation: spin 0.8s linear infinite, pulse-inner-accent 0.8s infinite;
+}
+.pulse.thinking {
+  animation: spin 2s linear infinite, pulse-inner-thinking 1.2s infinite;
+}
+.pulse.speaking {
+  animation: spin 1s linear infinite, pulse-inner-speaking 0.6s infinite;
+}
+
+/* Keyframe animations for avatar glow */
+@keyframes pulse-glow-accent {
+  from { box-shadow: 0 0 10px rgba(75,163,255,0.4), 0 0 20px rgba(75,163,255,0.2); }
+  to { box-shadow: 0 0 20px rgba(75,163,255,0.8), 0 0 40px rgba(75,163,255,0.6); }
+}
+@keyframes pulse-glow-thinking {
+  from { box-shadow: 0 0 10px rgba(255,215,0,0.4), 0 0 20px rgba(255,215,0,0.2); }
+  to { box-shadow: 0 0 20px rgba(255,215,0,0.8), 0 0 40px rgba(255,215,0,0.6); }
+}
+@keyframes pulse-glow-speaking {
+  from { box-shadow: 0 0 10px rgba(255,255,255,0.4), 0 0 20px rgba(255,255,255,0.2); }
+  to { box-shadow: 0 0 20px rgba(255,255,255,0.8), 0 0 40px rgba(255,255,255,0.6); }
+}
+
+/* Keyframe animations for inner pulse */
+@keyframes pulse-inner-accent {
+  0% { transform: scale(1); opacity: 0.7; }
+  50% { transform: scale(1.2); opacity: 1; }
+  100% { transform: scale(1); opacity: 0.7; }
+}
+@keyframes pulse-inner-thinking {
+  0% { transform: scale(1); opacity: 0.6; }
+  50% { transform: scale(1.1); opacity: 0.9; }
+  100% { transform: scale(1); opacity: 0.6; }
+}
+@keyframes pulse-inner-speaking {
+  0% { transform: scale(1); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 1; }
+  100% { transform: scale(1); opacity: 0.8; }
 }
 
 .controls { display:flex; gap:10px; align-items:center; margin-bottom:6px; flex-wrap: wrap; }

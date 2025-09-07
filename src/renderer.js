@@ -12,6 +12,24 @@ const closeSettingsBtn = document.getElementById('closeSettingsBtn');
 const themeSelect = document.getElementById('themeSelect');
 const readScreenBtn = document.getElementById('readScreenBtn');
 
+const avatarEl = document.querySelector('.avatar');
+const pulseEl = document.querySelector('.pulse');
+
+// Helper function to update avatar/pulse classes
+function updateAvatarState(state) {
+  if (!avatarEl || !pulseEl) return;
+
+  // Remove all state classes first
+  avatarEl.classList.remove('listening', 'thinking', 'speaking');
+  pulseEl.classList.remove('listening', 'thinking', 'speaking');
+
+  // Add the new state class if not idle
+  if (state !== 'idle') {
+    avatarEl.classList.add(state);
+    pulseEl.classList.add(state);
+  }
+}
+
 // Speech Synthesis setup
 let synth = window.speechSynthesis;
 let speaking = false;
@@ -129,12 +147,14 @@ function speakText(text) {
 
     utter.onstart = () => {
       if (statusEl) { statusEl.className = 'status speaking'; statusEl.textContent = 'Speaking'; }
+      updateAvatarState('speaking');
       try { window.aura.muteVoice(); } catch (e) {}
     };
     utter.onend = () => {
       speaking = false;
       speakQueue = "";
       if (statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
+      updateAvatarState('idle');
       try { window.aura.unmuteVoice(); } catch (e) {}
     };
     synth.speak(utter);
@@ -282,6 +302,7 @@ if (window.aura?.onEnd) {
       }
     } catch (e) {}
     if (!speaking && statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
+    if (!speaking) updateAvatarState('idle');
   });
 }
 
@@ -326,25 +347,28 @@ function bindMicControls() {
   micBtn.addEventListener('mousedown', () => {
     if (inputMode === 'wake') return;
     listening = true;
-    micBtn.classList.add('active');
+    micBtn.classList.add('listening');
     try { window.aura.sendCommand("START"); } catch (e) {}
     if (statusEl) { statusEl.className = 'status listening'; statusEl.textContent = 'Listening'; }
+    updateAvatarState('listening');
   });
 
   micBtn.addEventListener('mouseup', () => {
     if (inputMode === 'wake') return;
     listening = false;
-    micBtn.classList.remove('active');
+    micBtn.classList.remove('listening');
     try { window.aura.sendCommand("STOP"); } catch (e) {}
     if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
+    updateAvatarState('thinking');
   });
 
   micBtn.addEventListener('mouseleave', () => {
     if (listening && inputMode !== 'wake') {
       listening = false;
-      micBtn.classList.remove('active');
+      micBtn.classList.remove('listening');
       try { window.aura.sendCommand("STOP"); } catch (e) {}
       if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
+      updateAvatarState('thinking');
     }
   });
 }
@@ -356,6 +380,7 @@ if (window.aura?.onVoice) {
     if (!transcript?.trim() || !promptInput) return;
     promptInput.value = transcript;
     if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
+    updateAvatarState('thinking');
     sendPrompt();
   });
 }
@@ -368,6 +393,7 @@ if (window.aura?.onWakeWord) {
       statusEl.className = 'status listening';
       statusEl.textContent = `Wake word detected: ${word}`;
     }
+    updateAvatarState('listening');
     try { window.aura.sendCommand("START"); } catch (e) {}
   });
 }

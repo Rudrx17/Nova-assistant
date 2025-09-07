@@ -16,6 +16,7 @@ let voiceMuted = false; // when true, ignore transcripts
 let lastRequestTime = 0;
 const COOLDOWN_MS = 2000; // 2 seconds
 let lastScreenshot = null;
+let geminiChat = null;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -173,36 +174,36 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
 
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
+    // Initialize chat session if it doesn't exist
+    if (!geminiChat) {
+      geminiChat = model.startChat({
+        history: [
+          {
+            role: 'user',
+            parts: [{ text: "You are Aura, a helpful desktop assistant. You can open applications like Notepad, Calculator, and Paint. You can also show the desktop and lock the computer. When asked to perform these actions, respond with 'Would you like me to [action]?' For example, if asked to open Notepad, respond with 'Would you like me to open Notepad?'" }]
+          },
+          {
+            role: 'model',
+            parts: [{ text: 'Understood. I will respond with the suggested phrasing for system commands.' }]
+          },
+        ],
+        generationConfig: {
+          // You might want to add generation config here if needed
+        },
+      });
+    }
+
     const userParts = [{ text }];
     if (lastScreenshot) {
       userParts.push({ inline_data: { mime_type: 'image/png', data: lastScreenshot } });
       lastScreenshot = null; // Clear after use
     }
 
-    const chatHistory = [
-      {
-        role: 'user',
-        parts: [{ text: "You are Aura, a helpful desktop assistant. You can open applications like Notepad, Calculator, and Paint. You can also show the desktop and lock the computer. When asked to perform these actions, respond with 'Would you like me to [action]?' For example, if asked to open Notepad, respond with 'Would you like me to open Notepad?'" }]
-      },
-      {
-        role: 'model',
-        parts: [{ text: 'Understood. I will respond with the suggested phrasing for system commands.' }]
-      },
-      {
-        role: 'user',
-        parts: userParts // User's current message with optional screenshot
-      }
-    ];
+    // Send message using the persistent chat session
+    const result = await geminiChat.sendMessageStream(userParts); // Use sendMessageStream for streaming
 
-    const result = await model.generateContent({
-      contents: chatHistory
-    });
-
-    const response = result.response;
-    const stream = response.text(); // Get the streamed text directly
-
-    for await (const chunk of stream) { // Iterate over the streamed text
-      if (chunk) event.sender.send('ai:delta', { requestId, content: chunk });
+    for await (const chunk of result.stream) {
+      if (chunk) event.sender.send('ai:delta', { requestId, content: chunk.text() }); // Use chunk.text()
     }
 
     event.sender.send('ai:end', { requestId }); // This line was missing
@@ -251,7 +252,7 @@ ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
     let collected = '';
     for await (const chunk of result.stream) {
       const chunkText = chunk.text();
-      if (chunkText) event.sender.send('ai:delta', { requestId, content: chunkText });
+      if (chunkText) collected += chunkText;
     }
     const summary = collected.trim() || (text.split('.').slice(0,2).join('.')) || text.slice(0,160);
     event.sender.send('ai:summary', { requestId, summary });
@@ -298,36 +299,36 @@ ipcMain.on('ai:askWithScreenshot', async (event, { text, requestId }) => {
 
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
+    // Initialize chat session if it doesn't exist
+    if (!geminiChat) {
+      geminiChat = model.startChat({
+        history: [
+          {
+            role: 'user',
+            parts: [{ text: "You are Aura, a helpful desktop assistant. You can open applications like Notepad, Calculator, and Paint. You can also show the desktop and lock the computer. When asked to perform these actions, respond with 'Would you like me to [action]?' For example, if asked to open Notepad, respond with 'Would you like me to open Notepad?'" }]
+          },
+          {
+            role: 'model',
+            parts: [{ text: 'Understood. I will respond with the suggested phrasing for system commands.' }]
+          },
+        ],
+        generationConfig: {
+          // You might want to add generation config here if needed
+        },
+      });
+    }
+
     const userParts = [
       { text: text },
       { inline_data: { mime_type: 'image/png', data: lastScreenshot } }
     ];
     lastScreenshot = null; // Clear after use
 
-    const chatHistory = [
-      {
-        role: 'user',
-        parts: [{ text: "You are Aura, a helpful desktop assistant. You can open applications like Notepad, Calculator, and Paint. You can also show the desktop and lock the computer. When asked to perform these actions, respond with 'Would you like me to [action]?' For example, if asked to open Notepad, respond with 'Would you like me to open Notepad?'" }]
-      },
-      {
-        role: 'model',
-        parts: [{ text: 'Understood. I will respond with the suggested phrasing for system commands.' }]
-      },
-      {
-        role: 'user',
-        parts: userParts
-      }
-    ];
+    // Send message using the persistent chat session
+    const result = await geminiChat.sendMessageStream(userParts); // Use sendMessageStream for streaming
 
-    const result = await model.generateContent({
-      contents: chatHistory
-    });
-
-    const response = result.response;
-    const stream = response.text();
-
-    for await (const chunk of stream) {
-      if (chunk) event.sender.send('ai:delta', { requestId, content: chunk });
+    for await (const chunk of result.stream) {
+      if (chunk) event.sender.send('ai:delta', { requestId, content: chunk.text() });
     }
 
     event.sender.send('ai:end', { requestId });
