@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen } = require('electron');
+const { app, BrowserWindow, Tray, Menu, nativeImage, globalShortcut, ipcMain, screen, desktopCapturer } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
@@ -15,6 +15,7 @@ let pyProcess;
 let voiceMuted = false; // when true, ignore transcripts
 let lastRequestTime = 0;
 const COOLDOWN_MS = 2000; // 2 seconds
+let lastScreenshot = null;
 
 function createWindow() {
   win = new BrowserWindow({
@@ -88,6 +89,10 @@ app.whenReady().then(() => {
       } else if (msg.startsWith("WAKEWORD::")) {
         const word = msg.replace("WAKEWORD::", "").trim();
         if (win) win.webContents.send('voice:wakeword', word);
+      } else if (msg.startsWith("SCREENSHOT::")) {
+        lastScreenshot = msg.replace("SCREENSHOT::", "").trim();
+        // Optionally, notify the renderer that a screenshot has been taken
+        if (win) win.webContents.send('voice:screenshot_taken');
       } else {
         console.log("[Python]", msg);
       }
@@ -167,6 +172,13 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
     if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('MUTE\n');
 
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+    const userParts = [{ text }];
+    if (lastScreenshot) {
+      userParts.push({ inline_data: { mime_type: 'image/png', data: lastScreenshot } });
+      lastScreenshot = null; // Clear after use
+    }
+
     const chatHistory = [
       {
         role: 'user',
@@ -178,7 +190,7 @@ ipcMain.on('ai:ask', async (event, { text, requestId }) => {
       },
       {
         role: 'user',
-        parts: [{ text: text }] // User's current message
+        parts: userParts // User's current message with optional screenshot
       }
     ];
 
@@ -249,6 +261,87 @@ ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
   }
 });
 
+// ---------- Gemini streaming (ai:askWithScreenshot) ----------
+ipcMain.on('ai:askWithScreenshot', async (event, { text, requestId }) => {
+  console.log(`[Electron] ai:askWithScreenshot received. text: "${text}", lastScreenshot length: ${lastScreenshot ? lastScreenshot.length : 'null'}`);
+  if (!text || !lastScreenshot) {
+    console.warn("[Electron] ai:askWithScreenshot: text or lastScreenshot missing. Returning.");
+    return;
+  } // Ensure text and screenshot are present
+
+  const now = Date.now();
+  if (now - lastRequestTime < COOLDOWN_MS) {
+    console.warn("Request throttled due to cooldown.");
+    event.sender.send('ai:error', { requestId, error: 'Too many requests. Please wait a moment.' });
+    return;
+  }
+  lastRequestTime = now;
+
+  // Mock mode
+  if (process.env.MOCK_MODE === 'true') {
+    const fakeResponses = [
+      "Sure! Here's what I found with the screenshot.",
+      "This is a mock AI reply for testing with an image."
+    ];
+    for (let i = 0; i < fakeResponses.length; i++) {
+      await new Promise(r => setTimeout(r, 450));
+      event.sender.send('ai:delta', { requestId, content: fakeResponses[i] + ' ' });
+    }
+    event.sender.send('ai:end', { requestId });
+    return;
+  }
+
+  // Real Gemini streaming
+  try {
+    voiceMuted = true;
+    if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('MUTE\n');
+
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+
+    const userParts = [
+      { text: text },
+      { inline_data: { mime_type: 'image/png', data: lastScreenshot } }
+    ];
+    lastScreenshot = null; // Clear after use
+
+    const chatHistory = [
+      {
+        role: 'user',
+        parts: [{ text: "You are Aura, a helpful desktop assistant. You can open applications like Notepad, Calculator, and Paint. You can also show the desktop and lock the computer. When asked to perform these actions, respond with 'Would you like me to [action]?' For example, if asked to open Notepad, respond with 'Would you like me to open Notepad?'" }]
+      },
+      {
+        role: 'model',
+        parts: [{ text: 'Understood. I will respond with the suggested phrasing for system commands.' }]
+      },
+      {
+        role: 'user',
+        parts: userParts
+      }
+    ];
+
+    const result = await model.generateContent({
+      contents: chatHistory
+    });
+
+    const response = result.response;
+    const stream = response.text();
+
+    for await (const chunk of stream) {
+      if (chunk) event.sender.send('ai:delta', { requestId, content: chunk });
+    }
+
+    event.sender.send('ai:end', { requestId });
+    setTimeout(() => {
+      voiceMuted = false;
+      if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('UNMUTE\n');
+    }, 250);
+  } catch (err) {
+    console.error('Gemini API Error:', err);
+    event.sender.send('ai:error', { requestId, error: err.message || String(err) });
+    voiceMuted = false;
+  }
+});
+
 // Voice control handlers forwarded to Python helper via stdin
 ipcMain.on('voice:start', () => {
   if (pyProcess && pyProcess.stdin) pyProcess.stdin.write('START\n');
@@ -266,14 +359,65 @@ ipcMain.on('voice:unmute', () => {
 });
 
 // Generic command handler (MODE::XXX, START, STOP, etc.)
-ipcMain.on('voice:command', (_e, cmd) => {
+ipcMain.on('voice:command', async (_e, cmd) => {
   if (pyProcess && pyProcess.stdin) {
     pyProcess.stdin.write(cmd + '\n');
     console.log('[Electron → Python]', cmd);
   }
+
+  if (cmd === "READ_SCREEN") {
+    console.log("[Electron] Attempting screen capture...");
+    try {
+      const timeoutPromise = new Promise((resolve, reject) => {
+        setTimeout(() => {
+          reject(new Error("desktopCapturer.getSources() timed out."));
+        }, 10000); // 10 seconds timeout
+      });
+
+      const sourcesPromise = desktopCapturer.getSources({ types: ['screen'] });
+      const sources = await Promise.race([sourcesPromise, timeoutPromise]);
+
+      console.log("[Electron] desktopCapturer.getSources() returned.");
+
+      const primaryDisplay = screen.getPrimaryDisplay();
+      const primaryScreenSource = sources.find(source => source.display_id === String(primaryDisplay.id));
+
+      if (primaryScreenSource) {
+        console.log("[Electron] Primary screen source found. Capturing thumbnail...");
+        const thumbnail = await primaryScreenSource.thumbnail.toPNG();
+        console.log("[Electron] Thumbnail captured. Converting to base64...");
+        lastScreenshot = thumbnail.toString('base64');
+        console.log(`[Electron] lastScreenshot set. Length: ${lastScreenshot.length}`);
+        console.log("[Electron] Screenshot base64 encoded. Writing signal file...");
+        // Write a signal file to indicate screenshot is ready
+        fs.writeFileSync(path.join(app.getPath('temp'), 'aura_screenshot_ready.json'), JSON.stringify({ ready: true }));
+        console.log("[Electron] Signal file written.");
+      } else {
+        console.error("[Electron] Primary screen source not found.");
+      }
+    } catch (error) {
+      console.error("[Electron] Error capturing screen:", error);
+      if (win) win.webContents.send('ai:error', { requestId: 'screenshot', error: `Screen capture failed: ${error.message}` });
+    }
+  }
+});
+
+// Notify renderer that screenshot has been taken (via file polling)
+ipcMain.handle('voice:check_screenshot_signal', () => {
+  const signalFilePath = path.join(app.getPath('temp'), 'aura_screenshot_ready.json');
+  return fs.existsSync(signalFilePath);
+});
+
+ipcMain.on('voice:clear_screenshot_signal', () => {
+  const signalFilePath = path.join(app.getPath('temp'), 'aura_screenshot_ready.json');
+  if (fs.existsSync(signalFilePath)) {
+    fs.unlinkSync(signalFilePath);
+    console.log("[Electron] Screenshot signal file cleared.");
+  }
 });
 
 // System command handler
+
 ipcMain.on('system:command', (event, { command, requestId }) => {
   const COMMAND_WHITELIST = {
     'open notepad': 'start notepad.exe',

@@ -10,6 +10,7 @@ const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settings-panel');
 const closeSettingsBtn = document.getElementById('closeSettingsBtn');
 const themeSelect = document.getElementById('themeSelect');
+const readScreenBtn = document.getElementById('readScreenBtn');
 
 // Speech Synthesis setup
 let synth = window.speechSynthesis;
@@ -19,6 +20,7 @@ let selectedVoice = null;
 let pitchControl = null;
 let rateControl = null;
 let voiceSelect = null;
+let screenshotPending = false;
 
 // Config: Default input mode
 let inputMode = 'hybrid'; // default mode
@@ -53,6 +55,7 @@ if (modeSelect) {
 
 // Add message to chat
 function addMsg(text, who = 'assistant') {
+  console.log(`[Renderer] Adding message: ${text} (${who})`);
   const div = document.createElement('div');
   div.className = `msg ${who}`;
   div.textContent = text;
@@ -115,7 +118,12 @@ async function sendPrompt() {
   promptInput.value = '';
   addMsg('', 'assistant');
 
-  window.aura.ask(text, requestId);
+  if (screenshotPending) {
+    window.aura.askWithScreenshot(text, requestId);
+    screenshotPending = false;
+  } else {
+    window.aura.ask(text, requestId);
+  }
 }
 
 sendBtn.addEventListener('click', sendPrompt);
@@ -216,7 +224,31 @@ window.aura.onEnd(() => {
   if (!speaking && statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
 });
 window.aura.onSummary(({ summary }) => { if (summary) speakText(summary); });
-window.aura.onError(({ error }) => updateLastMsg(`\n[Error: ${error}]`));
+window.aura.onError(({ error }) => updateLastMsg(`
+[Error: ${error}]`));
+
+// Read Screen Button
+if (readScreenBtn) {
+  readScreenBtn.addEventListener('click', () => {
+    window.aura.sendCommand("READ_SCREEN");
+    addMsg("Taking screenshot...", 'assistant');
+    screenshotPending = true;
+
+    // Start polling for screenshot signal
+    const pollInterval = setInterval(async () => {
+      const isReady = await window.aura.checkScreenshotSignal();
+      if (isReady) {
+        clearInterval(pollInterval);
+        console.log("[Renderer] Screenshot taken event received via polling.");
+        if (screenshotPending) {
+          addMsg("Screenshot taken. What would you like to ask about it?", 'assistant');
+          promptInput.focus();
+          window.aura.clearScreenshotSignal(); // Clear the signal after processing
+        }
+      }
+    }, 500); // Check every 500ms
+  });
+}
 
 // Mic Support
 let listening = false;

@@ -29,7 +29,6 @@ import sounddevice as sd
 import speech_recognition as sr
 import webrtcvad
 import pvporcupine
-from pydub import AudioSegment
 
 
 recognizer = sr.Recognizer()
@@ -117,7 +116,7 @@ def handle_command(cmd):
         muted = False
         print("CMD::UNMUTE", flush=True)
 
-    elif cmd.startswith("MODE::"):
+    if cmd.startswith("MODE::"):
         # MODE::MIC / MODE::WAKE / MODE::HYBRID
         mode = cmd.split("::", 1)[1].strip()
         if mode in ("MIC", "WAKE", "HYBRID"):
@@ -130,6 +129,29 @@ def handle_command(cmd):
             logger.info(f"Switched mode to {input_mode}")
         else:
             logger.logger.warning(f"Unknown mode value: {mode}")
+
+    elif cmd == "READ_SCREEN":
+        logger.info("READ_SCREEN command received. Handled by Electron, ignoring in Python.")
+
+# ----------------- utils -----------------
+def rms_energy(frame_i16: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(frame_i16.astype(np.float32) ** 2)))
+
+def recognize_bytes(pcm_bytes: bytes) -> str | None:
+    audio = sr.AudioData(pcm_bytes, SAMPLE_RATE, 2)
+    with concurrent.futures.ThreadPoolExecutor() as ex:
+        fut = ex.submit(recognizer.recognize_google, audio)
+        try:
+            text = fut.strip() if text else None
+        except sr.UnknownValueError:
+            logger.warning("Google Speech could not understand audio")
+            return None
+        except sr.RequestError as e:
+            logger.error(f"Google Speech API request failed: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Recognition error: {e}")
+            return None
 
 # ----------------- utils -----------------
 def rms_energy(frame_i16: np.ndarray) -> float:
@@ -210,11 +232,6 @@ def stream_and_transcribe():
         global ambient_energy
         if status:
             logger.debug(f"Audio status: {status}")
-
-        # Pydub low-pass filter
-        audio_segment = AudioSegment(indata.tobytes(), frame_rate=SAMPLE_RATE, sample_width=indata.dtype.itemsize, channels=1)
-        filtered_segment = audio_segment.low_pass_filter(1000) # 1000 Hz cutoff
-        indata = np.array(filtered_segment.get_array_of_samples())
 
         data = indata.copy().reshape(-1)
         for i in range(0, len(data), FRAME_SAMPLES):

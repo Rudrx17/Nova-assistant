@@ -5,4 +5,4 @@ sounddevice>=0.4.6
 SpeechRecognition>=3.10.0
 webrtcvad-wheels>=2.0.10
 pvporcupine>=3.0.0
-pydub>=0.25.0
+Pillow>=9.0.0
