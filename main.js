@@ -363,16 +363,24 @@ async function handleAIRequest(event, { text, requestId }, withScreenshot) {
       messages.push(conversationHistory[h]);
     }
 
-    // Add current user message
-    var userContent = text;
-    if (withScreenshot) {
-      userContent = '[Screenshot taken] ' + text + ' (Note: The current AI model does not support image analysis. Respond based on the text question only.)';
+    // Add current user message and switch model if image is present
+    let reqModel = 'llama-3.3-70b-versatile';
+    if (withScreenshot && lastScreenshot) {
+      reqModel = 'meta-llama/llama-4-scout-17b-16e-instruct'; // Groq Vision model
+      messages.push({
+        role: 'user',
+        content: [
+          { type: 'text', text: text },
+          { type: 'image_url', image_url: { url: `data:image/png;base64,${lastScreenshot}` } }
+        ]
+      });
       lastScreenshot = null;
+    } else {
+      messages.push({ role: 'user', content: text });
     }
-    messages.push({ role: 'user', content: userContent });
 
     var stream = await groq.chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
+      model: reqModel,
       messages: messages,
       stream: true,
     });
