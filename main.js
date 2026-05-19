@@ -55,6 +55,7 @@ let win;
 let tray;
 let pyProcess;
 let voiceMuted = false;
+let muteCounter = 0;  // Track nested muting to avoid premature unmute
 let lastRequestTime = 0;
 const COOLDOWN_MS = 2000;
 let lastScreenshot = null;
@@ -334,6 +335,7 @@ async function handleAIRequest(event, { text, requestId }, withScreenshot) {
 
   try {
     voiceMuted = true;
+    muteCounter++;
     if (pyProcess && pyProcess.stdin && !pyProcess.stdin.destroyed) {
       pyProcess.stdin.write('MUTE\n');
     }
@@ -380,15 +382,23 @@ async function handleAIRequest(event, { text, requestId }, withScreenshot) {
 
     event.sender.send('ai:end', { requestId });
     setTimeout(() => {
-      voiceMuted = false;
-      if (pyProcess && pyProcess.stdin && !pyProcess.stdin.destroyed) {
-        pyProcess.stdin.write('UNMUTE\n');
+      muteCounter = Math.max(0, muteCounter - 1);
+      if (muteCounter === 0) {
+        voiceMuted = false;
+        if (pyProcess && pyProcess.stdin && !pyProcess.stdin.destroyed) {
+          pyProcess.stdin.write('UNMUTE\n');
+        }
       }
     }, 250);
   } catch (err) {
     console.error('Gemini API Error:', err);
     event.sender.send('ai:error', { requestId, error: err.message || String(err) });
     voiceMuted = false;
+    muteCounter = 0;
+    // Send UNMUTE to Python in case we sent MUTE before the error
+    if (pyProcess && pyProcess.stdin && !pyProcess.stdin.destroyed) {
+      pyProcess.stdin.write('UNMUTE\n');
+    }
   } finally {
     cleanup();
   }

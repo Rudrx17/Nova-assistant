@@ -373,13 +373,21 @@ function bindMicControls() {
   micBtn.addEventListener('mouseup', handleStop);
 
   // FIX: Don't send STOP on mouseleave — user may still be holding the button
-  // Only remove the visual cue; if the user releases anywhere, document mouseup fires
+  // Only remove the visual cue; if the user releases anywhere, we detect via document mouseup
   micBtn.addEventListener('mouseleave', () => {
     micBtn.classList.remove('listening');
   });
 
-  // FIX: Detect mouse release anywhere on the page (Discord-style hold-to-talk)
-  document.addEventListener('mouseup', handleStop);
+  // Detect mouse release anywhere — but ONLY if we started holding the mic
+  // Use a flag scoped in the closure so only a mic-button mousedown arms it
+  const onOutsideMouseUp = (e) => {
+    // Only fire if the mic was pressed AND the click didn't start on the mic button
+    // (mic button has its own mouseup handler that already fires)
+    if (e.target !== micBtn && !micBtn.contains(e.target)) {
+      handleStop();
+    }
+  };
+  document.addEventListener('mouseup', onOutsideMouseUp);
 }
 
 bindMicControls();

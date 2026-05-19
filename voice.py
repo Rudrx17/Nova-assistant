@@ -42,10 +42,9 @@ recognizer = sr.Recognizer()
 SAMPLE_RATE = 16000
 FRAME_MS = 30
 FRAME_SAMPLES = int(SAMPLE_RATE * FRAME_MS / 1000)
-RECOG_TIMEOUT = 10
+RECOG_TIMEOUT = 20
 
 MAX_SEGMENT_MS = 8000         # Max utterance length before auto-cut
-UTTERANCE_TIMEOUT_MS = 5000   # End listening after this much silence
 
 # Shared thread pool for speech recognition (reused across calls)
 _recognition_executor = concurrent.futures.ThreadPoolExecutor(
@@ -57,7 +56,7 @@ _recognition_executor = concurrent.futures.ThreadPoolExecutor(
 # Protected by _state_lock for thread-safe access
 _state_lock = threading.Lock()
 recording_enabled = True      # general gate for stream loop
-muted = False
+muted = 0                     # counter: mute > 0 means muted, tracks nested MUTEs
 mic_active = False            # true while user is pressing/using the mic
 stop_requested = False        # set when UI sends STOP to break current capture
 
@@ -102,11 +101,11 @@ def handle_command(cmd):
             print("CMD::STOP", flush=True)
 
         elif cmd == "MUTE":
-            muted = True
+            muted += 1
             print("CMD::MUTE", flush=True)
 
         elif cmd == "UNMUTE":
-            muted = False
+            muted = max(0, muted - 1)
             print("CMD::UNMUTE", flush=True)
 
     if cmd == "READ_SCREEN":
@@ -171,7 +170,6 @@ def stream_and_transcribe():
     global stop_requested
     buffer = []
     frames_in_segment = 0
-    last_speech_time = time.time()
 
     def end_segment(reason=""):
         nonlocal buffer, frames_in_segment
@@ -185,7 +183,7 @@ def stream_and_transcribe():
             logger.debug(f"Ending segment ({reason}), sending {len(pcm)} bytes to recognizer")
             recognized_text = recognize_bytes(pcm)
             with _state_lock:
-                is_muted = muted
+                is_muted = muted > 0
             if recognized_text and not is_muted:
                 logger.info(f"Transcript: {recognized_text}")
                 print(f"TRANSCRIPT::{recognized_text}", flush=True)
@@ -196,7 +194,7 @@ def stream_and_transcribe():
     _level_frames = 0
 
     def audio_callback(indata, frames, t, status):
-        nonlocal buffer, last_speech_time, _level_frames
+        nonlocal buffer, _level_frames
         if status:
             logger.debug(f"Audio status: {status}")
 
@@ -210,7 +208,6 @@ def stream_and_transcribe():
             # Push-to-talk: capture ALL audio frames (including silence between words)
             # Let Google Speech handle VAD internally
             buffer.append(frame_i16)
-            last_speech_time = time.time()
 
             # Compute RMS energy for live waveform visualization
             energy = float(np.sqrt(np.mean(frame_i16.astype(np.float32) ** 2)))
@@ -238,10 +235,6 @@ def stream_and_transcribe():
                 end_segment("stopped")  # Flush any remaining audio in buffer
                 with _state_lock:
                     stop_requested = False
-                break
-
-            if time.time() - last_speech_time > UTTERANCE_TIMEOUT_MS / 1000:
-                logger.info("Utterance timeout; breaking capture")
                 break
 
             time.sleep(0.01)
