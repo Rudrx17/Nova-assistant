@@ -92,6 +92,14 @@ const speechManager = {
     this.synth.speak(utter);
   },
 
+  stop() {
+    if (this.synth) {
+      this.synth.cancel();
+    }
+    this.speaking = false;
+    this.queue = [];
+  },
+
   populateVoices(voiceSelectEl) {
     if (!this.synth || !voiceSelectEl) return;
     const voices = this.synth.getVoices();
@@ -152,14 +160,18 @@ function updateLastMsg(extra) {
 
 // ===================== System Command Suggestion =====================
 function handleSystemCommandSuggestion(aiResponse, requestId) {
-  const commandRegex = /Would you like me to (open notepad|open calculator|open paint|show desktop|lock computer)\?/i;
+  const commandRegex = /Would you like me to (open notepad|open calculator|open paint|show desktop|lock computer|open vs code|open vscode|open visual studio code|open youtube|open whatsapp|open chrome|open spotify)\?/i;
   const match = aiResponse.match(commandRegex);
 
   if (match && match[1]) {
     const command = match[1].toLowerCase();
     try {
-      window.nova.runSystemCommand(command, requestId);
-      addMsg(`Executing: ${command}...`, 'assistant');
+      if (command.includes('vs code') || command.includes('vscode') || command.includes('visual studio')) {
+        handleVsCodeCommand();
+      } else {
+        window.nova.runSystemCommand(command, requestId);
+        addMsg(`Executing: ${command}...`, 'assistant');
+      }
     } catch (e) {
       addMsg(`Command failed to start: ${e?.message || e}`, 'assistant');
     }
@@ -331,14 +343,18 @@ async function sendPrompt() {
   }
 }
 
+// These are replaced later by sendPromptWithFileEdit — but we're attaching a named
+// handler so it can be properly removed
+let _keydownHandler;
 if (sendBtn) sendBtn.addEventListener('click', sendPrompt);
 if (promptInput) {
-  promptInput.addEventListener('keydown', (e) => {
+  _keydownHandler = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       sendPrompt();
     }
-  });
+  };
+  promptInput.addEventListener('keydown', _keydownHandler);
 }
 
 // ===================== Mic Controls (L2: scoped) =====================
@@ -392,6 +408,489 @@ function bindMicControls() {
 
 bindMicControls();
 
+// ===================== App/Website Open Handler =====================
+// Known apps/websites that can be opened directly
+const APP_COMMANDS = [
+  { keywords: ['youtube'], type: 'url', label: 'YouTube' },
+  { keywords: ['whatsapp', 'whats app', 'whats-app'], type: 'app', cmd: 'open whatsapp', label: 'WhatsApp' },
+  { keywords: ['chrome', 'google chrome', 'google-chrome'], type: 'app', cmd: 'open chrome', label: 'Chrome' },
+  { keywords: ['spotify'], type: 'app', cmd: 'open spotify', label: 'Spotify' },
+];
+
+function isAppOpenIntent(text) {
+  const lower = text.toLowerCase().trim();
+  // Must start with open/launch/start/play
+  const hasOpenAction = /^(open|launch|start|play)\b/i.test(lower);
+  if (!hasOpenAction) return false;
+  
+  for (let i = 0; i < APP_COMMANDS.length; i++) {
+    for (let j = 0; j < APP_COMMANDS[i].keywords.length; j++) {
+      if (lower.indexOf(APP_COMMANDS[i].keywords[j]) >= 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function getAppCommand(text) {
+  const lower = text.toLowerCase().trim();
+  for (let i = 0; i < APP_COMMANDS.length; i++) {
+    for (let j = 0; j < APP_COMMANDS[i].keywords.length; j++) {
+      if (lower.indexOf(APP_COMMANDS[i].keywords[j]) >= 0) {
+        return APP_COMMANDS[i];
+      }
+    }
+  }
+  return null;
+}
+
+function handleAppOpenCommand(appInfo) {
+  const label = appInfo.label;
+  addMsg('\ud83d\ude80 Opening **' + label + '**...', 'assistant');
+  const requestId = Date.now().toString();
+  window.nova.runSystemCommand(appInfo.cmd || ('open ' + label.toLowerCase()), requestId);
+}
+
+// ===================== File Fix (Analyze & Fix) Intent =====================
+const FIX_KEYWORDS = ['fix', 'analyze', 'debug', 'resolve', 'correct', 'repair', 'troubleshoot'];
+
+// Patterns for structured fix commands
+// fix filename.ext — fix all errors
+// fix filename.ext: additional instruction
+// fix errors in filename.ext
+// analyze filename.ext
+// debug filename.ext
+function isFixIntent(text) {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Structured: keyword filename.extension (with or without colon)
+  // e.g., "fix test.py", "fix test.py: add error handling"
+  if (/^(fix|analyze|debug|resolve|correct|repair|troubleshoot)\s+\S+\.\w{1,6}/i.test(trimmed)) {
+    return true;
+  }
+
+  // Structured: keyword errors/bugs in filename.extension
+  // e.g., "fix errors in test.py", "fix bugs in app.js"
+  if (/^(fix|resolve|correct|repair|troubleshoot)\s+(errors|bugs|issues)\s+(in|for|of)\s+\S+\.\w{1,6}/i.test(trimmed)) {
+    return true;
+  }
+
+  // Natural language: has fix keyword AND mentions a project file
+  if (projectFiles && projectFiles.length > 0) {
+    const hasFixAction = FIX_KEYWORDS.some(function(kw) { return lower.indexOf(kw) >= 0; });
+    if (hasFixAction) {
+      for (let i = 0; i < projectFiles.length; i++) {
+        var file = projectFiles[i];
+        var fileNameOnly = file.indexOf('/') >= 0 ? file.split('/').pop() : file;
+        var nameNoExt = getBaseName(fileNameOnly);
+        if (lower.indexOf(file.toLowerCase()) >= 0 ||
+            lower.indexOf(fileNameOnly.toLowerCase()) >= 0 ||
+            (nameNoExt.length > 1 && lower.indexOf(nameNoExt.toLowerCase()) >= 0)) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+function parseFixCommand(text) {
+  const trimmed = text.trim();
+
+  // Format 1: fix filename.ext: optional instruction
+  var match = trimmed.match(/^(fix|analyze|debug|resolve|correct|repair|troubleshoot)\s+(\S+\.\w{1,6})\s*(?::\s*(.+))?$/i);
+  if (match) {
+    return { fileName: match[2].trim(), instruction: match[3] || 'fix all errors and bugs' };
+  }
+
+  // Format 2: fix errors in filename.ext
+  match = trimmed.match(/^(fix|resolve|correct|repair|troubleshoot)\s+(errors|bugs|issues)\s+(in|for|of)\s+(\S+\.\w{1,6})/i);
+  if (match) {
+    return { fileName: match[4].trim(), instruction: 'fix all errors and bugs' };
+  }
+
+  // Format 3: analyze filename.ext for errors
+  match = trimmed.match(/^(analyze)\s+(\S+\.\w{1,6})\s+(for|to find)\s+(errors|bugs|issues)/i);
+  if (match) {
+    return { fileName: match[2].trim(), instruction: 'analyze and fix all errors and bugs' };
+  }
+
+  // Format 4: Natural language fallback — find filename in text
+  if (projectFiles && projectFiles.length > 0) {
+    var lower = trimmed.toLowerCase();
+    for (var i = 0; i < projectFiles.length; i++) {
+      var file = projectFiles[i];
+      var fileNameOnly = file.indexOf('/') >= 0 ? file.split('/').pop() : file;
+      var nameNoExt = getBaseName(fileNameOnly);
+      if (lower.indexOf(file.toLowerCase()) >= 0) {
+        return { fileName: file, instruction: 'fix all errors and bugs' };
+      }
+      if (lower.indexOf(fileNameOnly.toLowerCase()) >= 0) {
+        return { fileName: fileNameOnly, instruction: 'fix all errors and bugs' };
+      }
+      if (nameNoExt.length > 1 && lower.indexOf(nameNoExt.toLowerCase()) >= 0) {
+        return { fileName: fileNameOnly, instruction: 'fix all errors and bugs' };
+      }
+    }
+  }
+
+  // Last resort: extract any filename.ext from the text
+  match = trimmed.match(/\b(\S+\.\w{1,6})\b/);
+  if (match) {
+    return { fileName: match[1], instruction: 'fix all errors and bugs' };
+  }
+
+  return null;
+}
+
+function handleFixCommand(parsed) {
+  addMsg('\ud83d\udd0d Analyzing **' + parsed.fileName + '** for errors...', 'assistant');
+  var requestId = Date.now().toString();
+  window.nova.fixFileWithGemini(parsed.fileName, requestId);
+}
+
+// ===================== VS Code Handler =====================
+function isVsCodeIntent(text) {
+  const lower = text.toLowerCase();
+  const patterns = [
+    /open\s+(folder|project|directory|the).*(vs code|vscode|visual studio)/i,
+    /open\s+.*(vs code|vscode|visual studio code)/i,
+    /launch\s+.*(vs code|vscode|visual studio)/i,
+    /start\s+.*(vs code|vscode|visual studio)/i,
+  ];
+  return patterns.some(function(p) { return p.test(lower); });
+}
+
+function handleVsCodeCommand() {
+  addMsg('\ud83d\ude80 Launching VS Code' + (projectPath ? ' with **' + projectPath + '**...' : '...'), 'assistant');
+  window.nova.openVsCode().then(function(result) {
+    if (result.success) {
+      updateLastMsg('\n\u2705 VS Code opened' + (result.folder ? ' with **' + result.folder + '**' : '') + '.');
+    } else {
+      updateLastMsg('\n\u274c ' + (result.error || 'Failed to open VS Code.'));
+    }
+  }).catch(function(err) {
+    updateLastMsg('\n\u274c ' + (err.message || err));
+  });
+}
+
+// ===================== File Fix (Analyze & Fix) =====================
+if (window.nova?.onFileFixDelta) {
+  const cleanup = window.nova.onFileFixDelta(({ content }) => updateLastMsg(content));
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onFileFixEnd) {
+  const cleanup = window.nova.onFileFixEnd(({ path: filePath, fileName, size, hadIssues, success }) => {
+    if (success) {
+      if (hadIssues) {
+        addMsg('\u2705 Errors fixed and saved to **' + fileName + '** (' + size + ' bytes)', 'assistant');
+      } else {
+        addMsg('\u2705 No errors found in **' + fileName + '** — file is clean!', 'assistant');
+      }
+    }
+  });
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onFileFixError) {
+  const cleanup = window.nova.onFileFixError(({ error }) => {
+    updateLastMsg('\n\n[Error: ' + error + ']');
+  });
+  cleanupFunctions.push(cleanup);
+}
+
+// ===================== File Editor =====================
+let projectPath = null;
+let projectFiles = []; // list of file paths relative to project root
+
+// Register file edit IPC listeners
+if (window.nova?.onFileEditDelta) {
+  const cleanup = window.nova.onFileEditDelta(({ content }) => updateLastMsg(content));
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onFileEditEnd) {
+  const cleanup = window.nova.onFileEditEnd(({ path: filePath, fileName, size, created, success }) => {
+    if (success) {
+      const label = created ? '\u2728 File created' : '\u2705 File saved';
+      addMsg(label + ': ' + fileName + ' (' + size + ' bytes)', 'assistant');
+      // Add the new filename to project files list
+      if (created && fileName && !projectFiles.includes(fileName)) {
+        projectFiles.push(fileName);
+      }
+    }
+  });
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onFileEditError) {
+  const cleanup = window.nova.onFileEditError(({ error }) => {
+    updateLastMsg('\n\n[Error: ' + error + ']');
+  });
+  cleanupFunctions.push(cleanup);
+}
+
+// --- File command detection ---
+// Matches common file extensions to help detect filenames in natural language
+const FILE_EXT_PATTERN = /\.(\w{1,6})\s*$/i;
+
+// List of command keywords that trigger file editing
+const EDIT_KEYWORDS = ['edit', 'change', 'modify', 'update', 'write', 'add', 'put', 'create', 'make', 'generate', 'build'];
+
+function isFileEditCommand(text) {
+  const trimmed = text.trim();
+  const lower = trimmed.toLowerCase();
+
+  // Format 1: keyword filename: instruction (e.g., "edit styles.css: add dark mode")
+  // Also accept | and » as colon alternatives
+  if (/^(edit|change|modify|update|write|add|put|create|make|generate|build)\s+(.+?)[:»|](.+)$/i.test(trimmed)) {
+    return true;
+  }
+
+  // Format 2: write|add|put instruction to|in|into filename (e.g., "write a program to a.c.txt")
+  // The filename should have a file extension
+  if (/(write|add|put|create|make|generate|build)\s+.+\s+(to|in|into)\s+.+\.\w{1,6}\s*$/i.test(trimmed)) {
+    return true;
+  }
+
+  // Format 3: edit|change|modify|update filename instruction (e.g., "edit styles.css add dark mode")
+  // No colon — filename is detected by having a file extension
+  if (/(edit|change|modify|update|write|add|put|create|make|generate|build)\s+.+\.\w{1,6}\s+.+/i.test(trimmed)) {
+    return true;
+  }
+
+  return false;
+}
+
+function parseFileEditCommand(text) {
+  const trimmed = text.trim();
+
+  // Format 1: keyword filename: instruction (with :, |, or » separator)
+  let match = trimmed.match(/^(edit|change|modify|update|write|add|put|create|make|generate|build)\s+(.+?)[:»|](.+)$/i);
+  if (match) {
+    return { action: 'edit', fileName: match[2].trim(), instruction: match[3].trim() };
+  }
+
+  // Format 2: write|add|put instruction to|in|into filename
+  // Extract filename as the last word containing a file extension
+  match = trimmed.match(/(write|add|put|create|make|generate|build)\s+(.+)\s+(to|in|into)\s+((\S+\.\w{1,6})\s*)$/i);
+  if (match) {
+    return { action: 'edit', fileName: match[4].trim(), instruction: match[2].trim() };
+  }
+
+  // Format 3: edit|change|modify|update filename instruction (no colon)
+  // Extract filename as the text ending with a file extension
+  match = trimmed.match(/^(edit|change|modify|update|write|add|put|create|make|generate|build)\s+(\S+\.\w{1,6})\s+(.+)$/i);
+  if (match) {
+    return { action: 'edit', fileName: match[2].trim(), instruction: match[3].trim() };
+  }
+
+  return null;
+}
+
+// --- Open Folder button (added to suggestions) ---
+function openFolderPicker() {
+  if (!window.nova?.openFolder) {
+    addMsg('File editor not available.', 'assistant');
+    return;
+  }
+  addMsg('Opening folder picker...', 'assistant');
+  window.nova.openFolder().then((result) => {
+    if (!result) {
+      updateLastMsg('\nNo folder selected.');
+      return;
+    }
+    projectPath = result.path;
+    // Clear the placeholder
+    updateLastMsg('\n');
+    addMsg('\ud83d\udcc1 Opened: **' + result.path + '**', 'assistant');
+    addMsg('```\n' + result.tree + '```', 'assistant');
+    addMsg('You can now say: `edit filename: your instructions`', 'assistant');
+    // Store file list for auto-detection
+    if (result.files) {
+      projectFiles = result.files;
+    }
+  }).catch((err) => {
+    updateLastMsg('\nError: ' + (err.message || err));
+  });
+}
+
+// Helper: detect if natural language text seems file-related
+function getBaseName(name) {
+  const parts = name.split('/');
+  const file = parts[parts.length - 1] || name;
+  const dot = file.lastIndexOf('.');
+  return dot > 0 ? file.substring(0, dot) : file;
+}
+
+function looksLikeFileRequest(text, files) {
+  const lower = text.toLowerCase();
+
+  // Check if any project filename is mentioned (full path, filename, or name without extension)
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const fileNameOnly = file.indexOf('/') >= 0 ? file.split('/').pop() : file;
+    const nameNoExt = getBaseName(fileNameOnly);
+    if (lower.indexOf(file.toLowerCase()) >= 0 ||
+        lower.indexOf(fileNameOnly.toLowerCase()) >= 0 ||
+        (nameNoExt.length > 1 && lower.indexOf(nameNoExt.toLowerCase()) >= 0)) {
+      return true;
+    }
+  }
+
+  // Check for coding-related keywords (need at least 2 to avoid false positives)
+  const codeKeywords = ['write', 'program', 'function', 'code', 'file', 'script',
+    'implement', 'create', 'add', 'change', 'update', 'edit', 'build', 'make',
+    'class', 'method', 'app', 'project', 'compile', 'run'];
+  let matchCount = 0;
+  for (let j = 0; j < codeKeywords.length; j++) {
+    if (lower.indexOf(codeKeywords[j]) >= 0) {
+      matchCount++;
+      if (matchCount >= 2) return true;
+    }
+  }
+
+  return false;
+}
+
+// Intercept file edit commands in sendPrompt
+async function sendPromptWithFileEdit() {
+  const text = (promptInput?.value || '').trim();
+  if (!text || !promptInput) {
+    return;
+  }
+
+  // Interrupt TTS if currently speaking
+  if (speechManager.speaking) {
+    speechManager.stop();
+  }
+
+  // Check for VS Code intent FIRST (before file edit or AI)
+  if (isVsCodeIntent(text)) {
+    addMsg(text, 'user');
+    promptInput.value = '';
+    addMsg('', 'assistant');
+    handleVsCodeCommand();
+    return;
+  }
+
+  // Check for other app/website open intent (YouTube, WhatsApp, Chrome, Spotify)
+  if (isAppOpenIntent(text)) {
+    addMsg(text, 'user');
+    promptInput.value = '';
+    addMsg('', 'assistant');
+    const appInfo = getAppCommand(text);
+    if (appInfo) {
+      handleAppOpenCommand(appInfo);
+    } else {
+      // Fallback to normal AI
+      const requestId = Date.now().toString();
+      try { window.nova.ask(text, requestId); } catch (e) {
+        updateLastMsg('\\n[Error: ' + (e?.message || e) + ']');
+      }
+    }
+    return;
+  }
+
+  // Check for file fix/analyze intent (fix test.py, analyze app.js, etc.)
+  if (projectPath && isFixIntent(text)) {
+    addMsg(text, 'user');
+    promptInput.value = '';
+    addMsg('', 'assistant');
+    const parsed = parseFixCommand(text);
+    if (parsed) {
+      handleFixCommand(parsed);
+      return;
+    }
+  }
+
+  // Check if this is a file edit command
+  if (isFileEditCommand(text)) {
+    if (!projectPath) {
+      addMsg(text, 'user');
+      promptInput.value = '';
+      addMsg('', 'assistant');
+      updateLastMsg('Please open a folder first using the **Open Folder** button.');
+      return;
+    }
+
+    const parsed = parseFileEditCommand(text);
+    if (parsed && parsed.action === 'edit') {
+      const requestId = Date.now().toString();
+      addMsg(text, 'user');
+      promptInput.value = '';
+      addMsg('', 'assistant');
+
+      window.nova.editFileWithGemini(parsed.fileName, parsed.instruction, requestId);
+      return;
+    }
+  }
+
+  // Natural Language Fallback: detect if text seems file-related without pattern matching
+  if (projectPath && projectFiles.length > 0 && looksLikeFileRequest(text, projectFiles)) {
+    addMsg(text, 'user');
+    promptInput.value = '';
+    addMsg('', 'assistant');
+    const requestId = Date.now().toString();
+    window.nova.naturalLanguageEdit(text, requestId);
+    return;
+  }
+
+  // Normal send logic
+  const requestId = Date.now().toString();
+  addMsg(text, 'user');
+  promptInput.value = '';
+  addMsg('', 'assistant');
+
+  try {
+    if (screenshotPending) {
+      window.nova.askWithScreenshot(text, requestId);
+      screenshotPending = false;
+    } else {
+      window.nova.ask(text, requestId);
+    }
+  } catch (e) {
+    updateLastMsg('\n[Error: ' + (e?.message || e) + ']');
+  }
+}
+
+// Replace sendPrompt in all event listeners
+if (sendBtn) {
+  sendBtn.removeEventListener('click', sendPrompt);
+  sendBtn.addEventListener('click', sendPromptWithFileEdit);
+}
+if (promptInput && _keydownHandler) {
+  // Remove old handler by reference (now a named function stored in _keydownHandler)
+  promptInput.removeEventListener('keydown', _keydownHandler);
+  
+  _keydownHandler = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendPromptWithFileEdit();
+    }
+  };
+  promptInput.addEventListener('keydown', _keydownHandler);
+}
+
+// ===================== Open Folder Button =====================
+const openFolderBtn = document.getElementById('openFolderBtn');
+if (openFolderBtn) {
+  openFolderBtn.addEventListener('click', () => {
+    // If no project is open, open the picker
+    if (!projectPath) {
+      openFolderPicker();
+    } else {
+      // Show current folder path and file tree again
+      addMsg('\ud83d\udcc1 Current folder: **' + projectPath + '**', 'assistant');
+      addMsg('Say `edit filename: your instruction` to edit a file.', 'assistant');
+    }
+  });
+}
+
 // ===================== Read Screen Button =====================
 if (readScreenBtn) {
   readScreenBtn.addEventListener('click', () => {
@@ -425,7 +924,8 @@ if (window.nova?.onVoice) {
     promptInput.value = transcript;
     if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
     updateAvatarState('thinking');
-    sendPrompt();
+    // Use sendPromptWithFileEdit so voice can trigger file edits, NL edits, and VS Code too
+    sendPromptWithFileEdit();
   });
 }
 
