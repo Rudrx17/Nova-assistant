@@ -1,5 +1,5 @@
 {
-  "name": "aura-assistant",
+  "name": "nova-assistant",
   "version": "1.0.0",
   "description": "Frameless Windows AI assistant UI (Electron)",
   "main": "main.js",
@@ -10,8 +10,7 @@
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
-    "dotenv": "^17.2.1",
-    "openai": "^5.12.2"
+    "dotenv": "^17.2.1"
   },
   "devDependencies": {
     "electron": "^31.0.0"

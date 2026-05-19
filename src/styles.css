@@ -214,6 +214,25 @@ body.light-theme .chip:hover {
   background: rgba(0,0,0,0.15); color: var(--text);
 }
 
+.waveform-container {
+  height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: height 0.15s ease, opacity 0.15s ease;
+}
+
+.waveform-container.active {
+  height: 58px;
+  opacity: 1;
+}
+
+#waveformCanvas {
+  width: 100%;
+  height: 56px;
+  display: block;
+  border-radius: 8px;
+}
+
 .chat {
   flex: 1;
   overflow: auto;

@@ -1,3 +1,4 @@
+// ===================== DOM References =====================
 const chat = document.getElementById('chat');
 const promptInput = document.getElementById('prompt');
 const sendBtn = document.getElementById('sendBtn');
@@ -5,7 +6,6 @@ const micBtn = document.getElementById('micBtn');
 const closeBtn = document.getElementById('closeBtn');
 const minBtn = document.getElementById('minBtn');
 const statusEl = document.getElementById('status');
-const modeSelect = document.getElementById('modeSelect');
 const settingsBtn = document.getElementById('settingsBtn');
 const settingsPanel = document.getElementById('settings-panel');
 const closeSettingsBtn = document.getElementById('closeSettingsBtn');
@@ -15,7 +15,7 @@ const readScreenBtn = document.getElementById('readScreenBtn');
 const avatarEl = document.querySelector('.avatar');
 const pulseEl = document.querySelector('.pulse');
 
-// Helper function to update avatar/pulse classes
+// ===================== Avatar State =====================
 function updateAvatarState(state) {
   if (!avatarEl || !pulseEl) return;
 
@@ -28,66 +28,107 @@ function updateAvatarState(state) {
   }
 }
 
-// Speech Synthesis setup
-let synth = window.speechSynthesis;
-let speaking = false;
-let speakQueue = "";
-let selectedVoice = null;
-let pitchControl = null;
-let rateControl = null;
-let voiceSelect = null;
-let screenshotPending = false;
+// ===================== Speech Synthesis (L3: encapsulated) =====================
+const speechManager = {
+  synth: window.speechSynthesis,
+  speaking: false,
+  queue: [],
+  selectedVoice: null,
+  pitch: 1,
+  rate: 1,
 
-// Config: Default input mode
-let inputMode = 'hybrid';
-updateInputModeUI();
-try { window.aura.sendCommand("MODE::HYBRID"); } catch (e) {}
+  speak(text) {
+    if (!this.synth || !text) return;
 
-function updateInputModeUI() {
-  if (!micBtn) return;
-  if (inputMode === 'wake') {
-    micBtn.style.display = 'none';
-  } else {
-    micBtn.style.display = 'inline-block';
-  }
-}
+    // M3: Proper queue — push to array, process sequentially
+    this.queue.push(text);
+    if (!this.speaking) {
+      this._processQueue();
+    }
+  },
 
-if (modeSelect) {
-  modeSelect.value = inputMode;
-  modeSelect.addEventListener('change', () => {
-    inputMode = modeSelect.value;
-    updateInputModeUI();
+  _processQueue() {
+    if (this.queue.length === 0) {
+      this.speaking = false;
+      return;
+    }
 
-    try {
-      if (inputMode === 'mic') {
-        window.aura.sendCommand("MODE::MIC");
-      } else if (inputMode === 'wake') {
-        window.aura.sendCommand("MODE::WAKE");
-      } else {
-        window.aura.sendCommand("MODE::HYBRID");
+    this.speaking = true;
+    const textToSpeak = this.queue.shift();
+    const utter = new SpeechSynthesisUtterance(textToSpeak);
+    if (this.selectedVoice) utter.voice = this.selectedVoice;
+    utter.lang = this.selectedVoice?.lang || 'en-US';
+    utter.rate = this.rate;
+    utter.pitch = this.pitch;
+
+    utter.onstart = () => {
+      if (statusEl) { statusEl.className = 'status speaking'; statusEl.textContent = 'Speaking'; }
+      updateAvatarState('speaking');
+      try { window.nova.muteVoice(); } catch (e) { /* bridge not ready */ }
+    };
+
+    utter.onend = () => {
+      if (statusEl && this.queue.length === 0) {
+        statusEl.className = 'status idle';
+        statusEl.textContent = 'Idle';
       }
-    } catch (e) {}
-  });
-}
+      updateAvatarState(this.queue.length > 0 ? 'speaking' : 'idle');
+      if (this.queue.length === 0) {
+        try { window.nova.unmuteVoice(); } catch (e) { /* bridge not ready */ }
+      }
+      // Process next in queue
+      this._processQueue();
+    };
 
-// --- Markdown renderer ---
+    utter.onerror = (e) => {
+      console.error('Speech synthesis error:', e);
+      this.speaking = false;
+      this.queue = [];
+      if (statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
+      updateAvatarState('idle');
+      try { window.nova.unmuteVoice(); } catch (e) { /* bridge not ready */ }
+    };
+
+    this.synth.speak(utter);
+  },
+
+  populateVoices(voiceSelectEl) {
+    if (!this.synth || !voiceSelectEl) return;
+    const voices = this.synth.getVoices();
+    voiceSelectEl.innerHTML = '';
+    voices.forEach((v, i) => {
+      const opt = document.createElement('option');
+      opt.value = i;
+      opt.textContent = `${v.name} (${v.lang})`;
+      voiceSelectEl.appendChild(opt);
+    });
+    if (voices.length) {
+      this.selectedVoice = voices[0];
+      voiceSelectEl.value = 0;
+    }
+  }
+};
+
+// ===================== Markdown Renderer =====================
 function renderMarkdown(text) {
-  if (!text) return "";
+  if (!text) return '';
 
-  let html = text.replace(/[&<>]/g, t => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[t]));
-  html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>");
-  html = html.replace(/_(.+?)_/g, "<em>$1</em>");
-  html = html.replace(/^[ \t]*[\*\-\+][ \t]+(.+)$/gm, "<li>$1</li>");
-  html = html.replace(/(?:<li>[\s\S]*?<\/li>\s*)+/g, m => `<ul>${m}</ul>`);
-  html = html.replace(/^[ \t]*\d+[.)][ \t]+(.+)$/gm, "<li>$1</li>");
-  html = html.replace(/(?:<li>[\s\S]*?<\/li>\s*)+/g, m => `<ol>${m}</ol>`);
-  html = html.replace(/\n(?!<\/?(ul|ol|li)>)/g, "<br>");
+  let html = text.replace(/[&<>]/g, (t) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[t]
+  );
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+  html = html.replace(/_(.+?)_/g, '<em>$1</em>');
+  html = html.replace(/^[ \t]*[\*\-]+[ \t]+(.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(?:<li>[\s\S]*?<\/li>\s*)+/g, (m) => `<ul>${m}</ul>`);
+  html = html.replace(/^[ \t]*\d+[.)][ \t]+(.+)$/gm, '<li>$1</li>');
+  html = html.replace(/(?:<li>[\s\S]*?<\/li>\s*)+/g, (m) => `<ol>${m}</ol>`);
+  html = html.replace(/\n(?!<\/?(ul|ol|li)>)/g, '<br>');
 
   return html;
 }
 
-// --- Chat helpers ---
+// ===================== Chat Helpers =====================
 function addMsg(text, who = 'assistant') {
   if (!chat) return;
   const div = document.createElement('div');
@@ -109,35 +150,165 @@ function updateLastMsg(extra) {
   }
 }
 
-// --- Speech synthesis ---
-function speakText(text) {
-  if (!synth || !text) return;
-  speakQueue += text;
-  if (!speaking) {
-    speaking = true;
-    const utter = new SpeechSynthesisUtterance(speakQueue);
-    if (selectedVoice) utter.voice = selectedVoice;
-    utter.lang = selectedVoice?.lang || 'en-US';
-    utter.rate = rateControl ? parseFloat(rateControl.value) : 1;
-    utter.pitch = pitchControl ? parseFloat(pitchControl.value) : 1;
+// ===================== System Command Suggestion =====================
+function handleSystemCommandSuggestion(aiResponse, requestId) {
+  const commandRegex = /Would you like me to (open notepad|open calculator|open paint|show desktop|lock computer)\?/i;
+  const match = aiResponse.match(commandRegex);
 
-    utter.onstart = () => {
-      if (statusEl) { statusEl.className = 'status speaking'; statusEl.textContent = 'Speaking'; }
-      updateAvatarState('speaking');
-      try { window.aura.muteVoice(); } catch (e) {}
-    };
-    utter.onend = () => {
-      speaking = false;
-      speakQueue = "";
-      if (statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
-      updateAvatarState('idle');
-      try { window.aura.unmuteVoice(); } catch (e) {}
-    };
-    synth.speak(utter);
+  if (match && match[1]) {
+    const command = match[1].toLowerCase();
+    try {
+      window.nova.runSystemCommand(command, requestId);
+      addMsg(`Executing: ${command}...`, 'assistant');
+    } catch (e) {
+      addMsg(`Command failed to start: ${e?.message || e}`, 'assistant');
+    }
   }
 }
 
-// --- Prompt handling ---
+// ===================== Live Waveform Visualizer =====================
+let waveformShow = null;
+let waveformHide = null;
+
+const waveformContainer = document.getElementById('waveformContainer');
+const waveformCanvas = document.getElementById('waveformCanvas');
+
+if (waveformCanvas) {
+  const ctx = waveformCanvas.getContext('2d');
+  const BAR_COUNT = 32;
+  const barLevels = new Float32Array(BAR_COUNT);
+  const barTargets = new Float32Array(BAR_COUNT);
+  let animFrame = null;
+  let waveformActive = false;
+
+  // Size canvas to container
+  function resizeCanvas() {
+    const rect = waveformContainer.getBoundingClientRect();
+    const w = Math.floor(rect.width);
+    const h = 56;
+    if (waveformCanvas.width !== w || waveformCanvas.height !== h) {
+      waveformCanvas.width = w;
+      waveformCanvas.height = h;
+    }
+  }
+
+  function drawWaveform() {
+    if (!ctx || !waveformActive) {
+      animFrame = null;
+      return;
+    }
+
+    const w = waveformCanvas.width;
+    const h = waveformCanvas.height;
+    const gap = 3;
+    const barW = (w - gap * (BAR_COUNT + 1)) / BAR_COUNT;
+
+    // Smooth bars toward targets with momentum
+    for (let i = 0; i < BAR_COUNT; i++) {
+      const idx = (i + Math.floor(Math.random() * 2)) % BAR_COUNT;
+      if (barTargets[idx] > barLevels[idx]) {
+        barLevels[idx] += (barTargets[idx] - barLevels[idx]) * 0.35;
+      } else {
+        barLevels[idx] += (barTargets[idx] - barLevels[idx]) * 0.08;
+      }
+      if (barLevels[idx] < 0.005) barLevels[idx] = 0;
+    }
+
+    ctx.clearRect(0, 0, w, h);
+
+    const colors = [
+      { stop: 0.0, color: [75, 163, 255] },
+      { stop: 0.5, color: [120, 80, 255] },
+      { stop: 0.8, color: [200, 60, 240] },
+      { stop: 1.0, color: [255, 80, 120] },
+    ];
+
+    function getBarColor(t) {
+      const clamped = Math.max(0, Math.min(1, t));
+      for (let i = 0; i < colors.length - 1; i++) {
+        if (clamped >= colors[i].stop && clamped <= colors[i + 1].stop) {
+          const local = (clamped - colors[i].stop) / (colors[i + 1].stop - colors[i].stop);
+          const [r1, g1, b1] = colors[i].color;
+          const [r2, g2, b2] = colors[i + 1].color;
+          return `rgb(${Math.round(r1 + (r2 - r1) * local)}, ${Math.round(g1 + (g2 - g1) * local)}, ${Math.round(b1 + (b2 - b1) * local)})`;
+        }
+      }
+      return 'rgb(75, 163, 255)';
+    }
+
+    for (let i = 0; i < BAR_COUNT; i++) {
+      const barH = Math.max(2, barLevels[i] * h * 0.85);
+      const x = gap + i * (barW + gap);
+      const y = h - barH;
+
+      ctx.fillStyle = getBarColor(barLevels[i]);
+
+      const radius = Math.min(3, barW / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + radius, y);
+      ctx.lineTo(x + barW - radius, y);
+      ctx.quadraticCurveTo(x + barW, y, x + barW, y + radius);
+      ctx.lineTo(x + barW, h);
+      ctx.lineTo(x, h);
+      ctx.lineTo(x, y + radius);
+      ctx.quadraticCurveTo(x, y, x + radius, y);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    const gradient = ctx.createLinearGradient(0, 0, 0, h);
+    gradient.addColorStop(0, 'rgba(75, 163, 255, 0.08)');
+    gradient.addColorStop(1, 'rgba(75, 163, 255, 0)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, w, h);
+
+    animFrame = requestAnimationFrame(drawWaveform);
+  }
+
+  // Handle incoming audio levels from Python
+  if (window.nova?.onAudioLevel) {
+    const levelCleanup = window.nova.onAudioLevel((level) => {
+      for (let i = 0; i < BAR_COUNT; i++) {
+        const variation = 0.7 + Math.random() * 0.6;
+        barTargets[i] = Math.min(1, level * variation);
+      }
+      if (!animFrame && waveformActive) {
+        animFrame = requestAnimationFrame(drawWaveform);
+      }
+    });
+    if (typeof cleanupFunctions !== 'undefined') {
+      cleanupFunctions.push(levelCleanup);
+    }
+  }
+
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
+
+  waveformShow = () => {
+    resizeCanvas();
+    waveformActive = true;
+    waveformContainer.classList.add('active');
+    barLevels.fill(0);
+    barTargets.fill(0);
+    if (!animFrame) {
+      animFrame = requestAnimationFrame(drawWaveform);
+    }
+  };
+
+  waveformHide = () => {
+    waveformActive = false;
+    waveformContainer.classList.remove('active');
+    if (animFrame) {
+      cancelAnimationFrame(animFrame);
+      animFrame = null;
+    }
+    if (ctx) ctx.clearRect(0, 0, waveformCanvas.width, waveformCanvas.height);
+  };
+}
+
+// ===================== Prompt Handling =====================
+let screenshotPending = false;
+
 async function sendPrompt() {
   const text = (promptInput?.value || '').trim();
   if (!text || !promptInput) return;
@@ -149,10 +320,10 @@ async function sendPrompt() {
 
   try {
     if (screenshotPending) {
-      window.aura.askWithScreenshot(text, requestId);
+      window.nova.askWithScreenshot(text, requestId);
       screenshotPending = false;
     } else {
-      window.aura.ask(text, requestId);
+      window.nova.ask(text, requestId);
     }
   } catch (e) {
     updateLastMsg(`\n[Error: ${e?.message || e}]`);
@@ -169,36 +340,171 @@ if (promptInput) {
   });
 }
 
-// --- UI init ---
-window.addEventListener('DOMContentLoaded', () => {
-  voiceSelect = document.getElementById('voiceSelect');
-  pitchControl = document.getElementById('pitchRange');
-  rateControl = document.getElementById('rateRange');
+// ===================== Mic Controls (L2: scoped) =====================
+function bindMicControls() {
+  if (!micBtn) return;
 
-  if (synth && voiceSelect) {
-    const populate = () => {
-      const voices = synth.getVoices();
-      voiceSelect.innerHTML = '';
-      voices.forEach((v, i) => {
-        const opt = document.createElement('option');
-        opt.value = i;
-        opt.textContent = `${v.name} (${v.lang})`;
-        voiceSelect.appendChild(opt);
-      });
-      if (voices.length) {
-        selectedVoice = voices[0];
-        voiceSelect.value = 0;
+  // L2: listening is now scoped inside this closure
+  let listening = false;
+
+  micBtn.addEventListener('mousedown', () => {
+    listening = true;
+    micBtn.classList.add('listening');
+    try { window.nova.sendCommand('START'); } catch (e) { /* bridge not ready */ }
+    if (statusEl) { statusEl.className = 'status listening'; statusEl.textContent = 'Listening'; }
+    updateAvatarState('listening');
+    // Show live waveform
+    if (typeof waveformShow === 'function') waveformShow();
+  });
+
+  // FIX: Use document-level mouseup to detect release even if cursor leaves the button
+  const handleStop = () => {
+    if (!listening) return;
+    listening = false;
+    micBtn.classList.remove('listening');
+    try { window.nova.sendCommand('STOP'); } catch (e) { /* bridge not ready */ }
+    if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
+    updateAvatarState('thinking');
+    // Hide live waveform
+    if (typeof waveformHide === 'function') waveformHide();
+  };
+
+  micBtn.addEventListener('mouseup', handleStop);
+
+  // FIX: Don't send STOP on mouseleave — user may still be holding the button
+  // Only remove the visual cue; if the user releases anywhere, document mouseup fires
+  micBtn.addEventListener('mouseleave', () => {
+    micBtn.classList.remove('listening');
+  });
+
+  // FIX: Detect mouse release anywhere on the page (Discord-style hold-to-talk)
+  document.addEventListener('mouseup', handleStop);
+}
+
+bindMicControls();
+
+// ===================== Read Screen Button =====================
+if (readScreenBtn) {
+  readScreenBtn.addEventListener('click', () => {
+    try { window.nova.sendCommand('READ_SCREEN'); } catch (e) { /* bridge not ready */ }
+    addMsg('Taking screenshot...', 'assistant');
+    screenshotPending = true;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const isReady = await window.nova.checkScreenshotSignal();
+        if (isReady) {
+          clearInterval(pollInterval);
+          if (screenshotPending) {
+            addMsg('Screenshot taken. What would you like to ask about it?', 'assistant');
+            promptInput?.focus();
+            try { window.nova.clearScreenshotSignal(); } catch (e) { /* bridge not ready */ }
+          }
+        }
+      } catch (e) {
+        clearInterval(pollInterval);
+        addMsg('Error while checking screenshot signal.', 'assistant');
       }
-    };
-    populate();
-    synth.onvoiceschanged = populate;
+    }, 500);
+  });
+}
+
+// ===================== Voice Transcript Handler =====================
+if (window.nova?.onVoice) {
+  window.nova.onVoice((transcript) => {
+    if (!transcript?.trim() || !promptInput) return;
+    promptInput.value = transcript;
+    if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
+    updateAvatarState('thinking');
+    sendPrompt();
+  });
+}
+
+// ===================== AI Streaming Handlers (H3: with cleanup) =====================
+const cleanupFunctions = [];
+
+if (window.nova?.onDelta) {
+  const cleanup = window.nova.onDelta(({ content }) => updateLastMsg(content));
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onEnd) {
+  const cleanup = window.nova.onEnd(() => {
+    try {
+      const last = chat?.lastChild;
+      if (last && last.classList.contains('assistant')) {
+        const full = last.textContent || '';
+        const requestId = Date.now().toString();
+        window.nova.summarize(full, requestId);
+        handleSystemCommandSuggestion(full, requestId);
+      }
+    } catch (e) { /* ignore */ }
+    if (!speechManager.speaking && statusEl) {
+      statusEl.className = 'status idle';
+      statusEl.textContent = 'Idle';
+    }
+    if (!speechManager.speaking) updateAvatarState('idle');
+  });
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onSummary) {
+  const cleanup = window.nova.onSummary(({ summary }) => {
+    if (summary) speechManager.speak(summary);
+  });
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onError) {
+  const cleanup = window.nova.onError(({ error }) => updateLastMsg(`\n[Error: ${error}]`));
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onSystemCommandResponse) {
+  const cleanup = window.nova.onSystemCommandResponse(
+    ({ requestId, success, error, stdout, stderr }) => {
+      if (success) {
+        addMsg('Command executed successfully!', 'assistant');
+        if (stdout) addMsg(`Output: ${stdout}`, 'assistant');
+      } else {
+        addMsg(`Command failed: ${error}`, 'assistant');
+        if (stderr) addMsg(`Error details: ${stderr}`, 'assistant');
+      }
+    }
+  );
+  cleanupFunctions.push(cleanup);
+}
+
+// ===================== UI Init =====================
+window.addEventListener('DOMContentLoaded', () => {
+  const voiceSelect = document.getElementById('voiceSelect');
+  const pitchControl = document.getElementById('pitchRange');
+  const rateControl = document.getElementById('rateRange');
+
+  // Speech synthesis setup
+  if (speechManager.synth && voiceSelect) {
+    speechManager.populateVoices(voiceSelect);
+    speechManager.synth.onvoiceschanged = () => speechManager.populateVoices(voiceSelect);
 
     voiceSelect.addEventListener('change', () => {
-      const voices = synth.getVoices();
-      selectedVoice = voices[parseInt(voiceSelect.value, 10)];
+      const voices = speechManager.synth.getVoices();
+      speechManager.selectedVoice = voices[parseInt(voiceSelect.value, 10)];
     });
   }
 
+  if (pitchControl) {
+    pitchControl.addEventListener('input', () => {
+      speechManager.pitch = parseFloat(pitchControl.value);
+    });
+  }
+
+  if (rateControl) {
+    rateControl.addEventListener('input', () => {
+      speechManager.rate = parseFloat(rateControl.value);
+    });
+  }
+
+  // Theme
   if (themeSelect) {
     const savedTheme = localStorage.getItem('theme');
     if (savedTheme) {
@@ -216,6 +522,7 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Opacity
   const opacityRange = document.getElementById('opacityRange');
   if (opacityRange) {
     const savedOpacity = localStorage.getItem('uiOpacity');
@@ -230,148 +537,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// --- AI streaming handlers ---
-if (window.aura?.onDelta) {
-  window.aura.onDelta(({ content }) => updateLastMsg(content));
-}
-if (window.aura?.onEnd) {
-  window.aura.onEnd(() => {
-    try {
-      const last = chat?.lastChild;
-      if (last && last.classList.contains('assistant')) {
-        const full = last.textContent || '';
-        const requestId = Date.now().toString();
-        window.aura.summarize(full, requestId);
-        handleSystemCommandSuggestion(full, requestId);
-      }
-    } catch (e) {}
-    if (!speaking && statusEl) { statusEl.className = 'status idle'; statusEl.textContent = 'Idle'; }
-    if (!speaking) updateAvatarState('idle');
-  });
-}
-if (window.aura?.onSummary) {
-  window.aura.onSummary(({ summary }) => { if (summary) speakText(summary); });
-}
-if (window.aura?.onError) {
-  window.aura.onError(({ error }) => updateLastMsg(`\n[Error: ${error}]`));
-}
-
-// --- System command suggestion ---
-function handleSystemCommandSuggestion(aiResponse, requestId) {
-  const commandRegex = /Would you like me to (open notepad|open calculator|open paint|show desktop|lock computer)\?/i;
-  const match = aiResponse.match(commandRegex);
-
-  if (match && match[1]) {
-    const command = match[1].toLowerCase();
-    try {
-      window.aura.runSystemCommand(command, requestId);
-      addMsg(`Executing: ${command}...`, 'assistant');
-    } catch (e) {
-      addMsg(`Command failed to start: ${e?.message || e}`, 'assistant');
-    }
-  }
-}
-
-if (window.aura?.onSystemCommandResponse) {
-  window.aura.onSystemCommandResponse(({ requestId, success, error, stdout, stderr }) => {
-    if (success) {
-      addMsg(`Command executed successfully!`, 'assistant');
-      if (stdout) addMsg(`Output: ${stdout}`, 'assistant');
-    } else {
-      addMsg(`Command failed: ${error}`, 'assistant');
-      if (stderr) addMsg(`Error details: ${stderr}`, 'assistant');
-    }
-  });
-}
-
-// --- Read Screen button ---
-if (readScreenBtn) {
-  readScreenBtn.addEventListener('click', () => {
-    try { window.aura.sendCommand("READ_SCREEN"); } catch (e) {}
-    addMsg("Taking screenshot...", 'assistant');
-    screenshotPending = true;
-
-    const pollInterval = setInterval(async () => {
-      try {
-        const isReady = await window.aura.checkScreenshotSignal();
-        if (isReady) {
-          clearInterval(pollInterval);
-          if (screenshotPending) {
-            addMsg("Screenshot taken. What would you like to ask about it?", 'assistant');
-            promptInput?.focus();
-            try { window.aura.clearScreenshotSignal(); } catch (e) {}
-
-            
-          }
-        }
-      } catch (e) {
-        clearInterval(pollInterval);
-        addMsg("Error while checking screenshot signal.", 'assistant');
-      }
-    }, 500);
-  });
-}
-
-// --- Mic controls ---
-let listening = false;
-function bindMicControls() {
-  if (!micBtn) return;
-
-  micBtn.addEventListener('mousedown', () => {
-    if (inputMode === 'wake') return;
-    listening = true;
-    micBtn.classList.add('listening');
-    try { window.aura.sendCommand("START"); } catch (e) {}
-    if (statusEl) { statusEl.className = 'status listening'; statusEl.textContent = 'Listening'; }
-    updateAvatarState('listening');
-  });
-
-  micBtn.addEventListener('mouseup', () => {
-    if (inputMode === 'wake') return;
-    listening = false;
-    micBtn.classList.remove('listening');
-    try { window.aura.sendCommand("STOP"); } catch (e) {}
-    if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
-    updateAvatarState('thinking');
-  });
-
-  micBtn.addEventListener('mouseleave', () => {
-    if (listening && inputMode !== 'wake') {
-      listening = false;
-      micBtn.classList.remove('listening');
-      try { window.aura.sendCommand("STOP"); } catch (e) {}
-      if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
-      updateAvatarState('thinking');
-    }
-  });
-}
-bindMicControls();
-
-// --- Voice transcript ---
-if (window.aura?.onVoice) {
-  window.aura.onVoice((transcript) => {
-    if (!transcript?.trim() || !promptInput) return;
-    promptInput.value = transcript;
-    if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
-    updateAvatarState('thinking');
-    sendPrompt();
-  });
-}
-
-// --- Wake word ---
-if (window.aura?.onWakeWord) {
-  window.aura.onWakeWord((word) => {
-    if (inputMode === 'mic') return;
-    if (statusEl) {
-      statusEl.className = 'status listening';
-      statusEl.textContent = `Wake word detected: ${word}`;
-    }
-    updateAvatarState('listening');
-    try { window.aura.sendCommand("START"); } catch (e) {}
-  });
-}
-
-// --- Settings panel ---
+// ===================== Settings Panel =====================
 if (settingsBtn && settingsPanel && closeSettingsBtn) {
   settingsBtn.addEventListener('click', () => {
     settingsPanel.classList.remove('hidden');
@@ -382,6 +548,24 @@ if (settingsBtn && settingsPanel && closeSettingsBtn) {
   });
 }
 
-// --- Window controls ---
-if (closeBtn) closeBtn.addEventListener('click', () => { try { window.aura.closeWindow(); } catch (e) {} });
-if (minBtn) minBtn.addEventListener('click', () => { try { window.aura.minimizeWindow(); } catch (e) {} });
+// ===================== Cleanup on Window Close (H3) =====================
+window.addEventListener('beforeunload', () => {
+  // Invoke all stored cleanup functions to remove IPC listeners
+  for (const cleanup of cleanupFunctions) {
+    try { cleanup(); } catch (e) { /* ignore cleanup errors */ }
+  }
+  // Also remove all listeners via preload bridge
+  try { window.nova.removeAllListeners(); } catch (e) { /* bridge not ready */ }
+});
+
+// ===================== Window Controls =====================
+if (closeBtn) {
+  closeBtn.addEventListener('click', () => {
+    try { window.nova.closeWindow(); } catch (e) { /* bridge not ready */ }
+  });
+}
+if (minBtn) {
+  minBtn.addEventListener('click', () => {
+    try { window.nova.minimizeWindow(); } catch (e) { /* bridge not ready */ }
+  });
+}
