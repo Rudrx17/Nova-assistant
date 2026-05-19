@@ -18,7 +18,7 @@ process.on('uncaughtException', (error) => {
 // ===================== Env Validation =====================
 function validateEnv() {
   const requiredVars = [
-    { key: 'GEMINI_API_KEY', name: 'Gemini API Key', url: 'https://aistudio.google.com/' }
+    { key: 'GROQ_API_KEY', name: 'Groq API Key', url: 'https://console.groq.com/keys' }
   ];
 
   let allValid = true;
@@ -39,7 +39,7 @@ function validateEnv() {
   const envPath = path.join(__dirname, '.env');
   if (!fs.existsSync(envPath)) {
     console.warn('[WARN] .env file not found at:', envPath);
-    console.warn('  Create one with: GEMINI_API_KEY=your_key_here');
+    console.warn('  Create one with: GROQ_API_KEY=your_key_here');
   }
 
   return allValid;
@@ -47,9 +47,9 @@ function validateEnv() {
 
 const envValid = validateEnv();
 
-// --- Gemini ---
-const { GoogleGenerativeAI } = require('@google/generative-ai');
-const genAI = envValid ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY.trim()) : null;
+// --- Groq (OpenAI-compatible) ---
+const OpenAI = require('openai');
+const groq = envValid ? new OpenAI({ apiKey: process.env.GROQ_API_KEY.trim(), baseURL: 'https://api.groq.com/openai/v1' }) : null;
 
 let win;
 let tray;
@@ -59,7 +59,7 @@ let muteCounter = 0;  // Track nested muting to avoid premature unmute
 let lastRequestTime = 0;
 const COOLDOWN_MS = 2000;
 let lastScreenshot = null;
-let geminiChat = null;
+let conversationHistory = [];
 
 // File Editor state
 let currentProjectPath = null;
@@ -114,7 +114,7 @@ function createWindow() {
     if (!envValid) {
       win.webContents.send('ai:error', {
         requestId: 'startup',
-        error: 'Missing GEMINI_API_KEY. Check your .env file.'
+        error: 'Missing GROQ_API_KEY. Check your .env file.'
       });
     }
   });
@@ -296,7 +296,7 @@ async function handleAIRequest(event, { text, requestId }, withScreenshot) {
 
   // H5: Request deduplication
   if (inFlightRequests.has(requestId)) {
-    console.warn(`[AI] Duplicate request ID: ${requestId}, ignoring.`);
+    console.warn('[AI] Duplicate request ID: ' + requestId + ', ignoring.');
     return;
   }
   inFlightRequests.add(requestId);
@@ -309,26 +309,26 @@ async function handleAIRequest(event, { text, requestId }, withScreenshot) {
     return;
   }
 
-  if (!genAI) {
-    event.sender.send('ai:error', { requestId, error: 'Gemini API not configured. Set GEMINI_API_KEY in .env' });
+  if (!groq) {
+    event.sender.send('ai:error', { requestId, error: 'Groq API not configured. Set GROQ_API_KEY in .env' });
     cleanup();
     return;
   }
 
   if (withScreenshot && !lastScreenshot) {
-    console.warn("[Electron] Missing screenshot for askWithScreenshot.");
+    console.warn('[Electron] Missing screenshot for askWithScreenshot.');
     cleanup();
     return;
   }
 
   // Mock mode
   if (process.env.MOCK_MODE === 'true') {
-    const fakeResponses = withScreenshot
-      ? ["Sure! Here's what I found with the screenshot.", "This is a mock AI reply for testing with an image."]
-      : ["Sure! Here's what I found.", "This is just a mock AI reply for testing.", "Imagine this is a real AI response coming from Gemini.", "I can answer your question once you connect the real API."];
+    var fakeResponses = withScreenshot
+      ? ['Mock: Screenshot received. What would you like to know?', 'Mock: This is a test response.']
+      : ['Mock: Sure! Here\'s what I found.', 'Mock: This is a test AI response.', 'Mock: Imagine this is a real response.'];
 
-    for (let i = 0; i < fakeResponses.length; i++) {
-      await new Promise(r => setTimeout(r, 450));
+    for (var i = 0; i < fakeResponses.length; i++) {
+      await new Promise(function(r) { setTimeout(r, 450); });
       event.sender.send('ai:delta', { requestId, content: fakeResponses[i] + ' ' });
     }
     event.sender.send('ai:end', { requestId });
@@ -343,48 +343,62 @@ async function handleAIRequest(event, { text, requestId }, withScreenshot) {
       pyProcess.stdin.write('MUTE\n');
     }
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
     // L4: Reset chat if it exceeds max turns
-    if (!geminiChat || chatTurnCount >= MAX_CHAT_TURNS) {
-      geminiChat = model.startChat({
-        history: [
-          {
-            role: 'user',
-            parts: [{ text: "You are Nova, a helpful desktop assistant..." }]
-          },
-          {
-            role: 'model',
-            parts: [{ text: 'Understood. I will respond with the suggested phrasing for system commands.' }]
-          },
-        ],
-      });
+    if (chatTurnCount >= MAX_CHAT_TURNS) {
+      conversationHistory = [];
       chatTurnCount = 0;
     }
 
-    const userParts = [{ text }];
-    if (withScreenshot && lastScreenshot) {
-      userParts.push({ inline_data: { mime_type: 'image/png', data: lastScreenshot } });
-      lastScreenshot = null;
+    // Build messages array
+    var messages = [
+      { role: 'system', content: 'You are Nova, a helpful desktop assistant. You can help with coding, file edits, system commands, and general questions. Keep responses concise and helpful.' },
+    ];
+
+    // Add conversation history
+    for (var h = 0; h < conversationHistory.length; h++) {
+      messages.push(conversationHistory[h]);
     }
 
-    const result = await geminiChat.sendMessageStream(userParts);
-    chatTurnCount++;
+    // Add current user message
+    var userContent = text;
+    if (withScreenshot) {
+      userContent = '[Screenshot taken] ' + text + ' (Note: The current AI model does not support image analysis. Respond based on the text question only.)';
+      lastScreenshot = null;
+    }
+    messages.push({ role: 'user', content: userContent });
 
-    for await (const chunk of result.stream) {
-      if (chunk) {
+    var stream = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: messages,
+      stream: true,
+    });
+
+    var fullResponse = '';
+    for await (var chunk of stream) {
+      var content = chunk.choices[0]?.delta?.content || '';
+      if (content) {
+        fullResponse += content;
         try {
-          event.sender.send('ai:delta', { requestId, content: chunk.text() });
+          event.sender.send('ai:delta', { requestId, content: content });
         } catch (sendErr) {
-          // Renderer may have disconnected
-          console.warn('[AI] Failed to send delta, renderer may be gone:', sendErr.message);
+          console.warn('[AI] Failed to send delta:', sendErr.message);
           break;
         }
       }
     }
 
+    // Store in conversation history
+    conversationHistory.push({ role: 'user', content: text });
+    conversationHistory.push({ role: 'assistant', content: fullResponse });
+    chatTurnCount++;
+
+    // Trim history to max turns (prune oldest)
+    if (conversationHistory.length > MAX_CHAT_TURNS * 2) {
+      conversationHistory = conversationHistory.slice(-MAX_CHAT_TURNS * 2);
+    }
+
     event.sender.send('ai:end', { requestId });
-    setTimeout(() => {
+    setTimeout(function() {
       muteCounter = Math.max(0, muteCounter - 1);
       if (muteCounter === 0) {
         voiceMuted = false;
@@ -394,11 +408,10 @@ async function handleAIRequest(event, { text, requestId }, withScreenshot) {
       }
     }, 250);
   } catch (err) {
-    console.error('Gemini API Error:', err);
+    console.error('Groq API Error:', err);
     event.sender.send('ai:error', { requestId, error: err.message || String(err) });
     voiceMuted = false;
     muteCounter = 0;
-    // Send UNMUTE to Python in case we sent MUTE before the error
     if (pyProcess && pyProcess.stdin && !pyProcess.stdin.destroyed) {
       pyProcess.stdin.write('UNMUTE\n');
     }
@@ -431,7 +444,7 @@ ipcMain.on('ai:stop', (event, { requestId }) => {
 ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
   if (!text) return;
 
-  const now = Date.now();
+  var now = Date.now();
   if (now - lastRequestTime < COOLDOWN_MS) {
     event.sender.send('ai:summary', { requestId, summary: text.split('.').slice(0, 2).join('.') });
     return;
@@ -439,27 +452,30 @@ ipcMain.on('ai:summarize', async (event, { text, requestId }) => {
   lastRequestTime = now;
 
   if (process.env.MOCK_MODE === 'true') {
-    const fakeSummary = 'Short summary: ' + (text.split('.').slice(0, 2).join('.').slice(0, 200) || text.slice(0, 120));
+    var fakeSummary = 'Short summary: ' + (text.split('.').slice(0, 2).join('.').slice(0, 200) || text.slice(0, 120));
     event.sender.send('ai:summary', { requestId, summary: fakeSummary });
     return;
   }
 
-  if (!genAI) {
+  if (!groq) {
     event.sender.send('ai:summary', { requestId, summary: text.split('.').slice(0, 2).join('.') });
     return;
   }
 
   try {
-    const prompt = `Summarize this:\n\n${text}`;
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-    const result = await model.generateContentStream(prompt);
-    let collected = '';
-    for await (const chunk of result.stream) {
-      const chunkText = chunk.text();
-      if (chunkText) collected += chunkText;
+    var result = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: 'Summarize the following text concisely in 2-3 sentences.' },
+        { role: 'user', content: text }
+      ],
+      stream: false,
+    });
+    var summary = (result.choices[0]?.message?.content || '').trim();
+    if (!summary) {
+      summary = text.split('.').slice(0, 2).join('.') || text.slice(0, 160);
     }
-    const summary = collected.trim() || (text.split('.').slice(0, 2).join('.')) || text.slice(0, 160);
-    event.sender.send('ai:summary', { requestId, summary });
+    event.sender.send('ai:summary', { requestId, summary: summary });
   } catch (err) {
     console.error('Summarize Error:', err);
     event.sender.send('ai:summary', { requestId, summary: text.split('.').slice(0, 2).join('.') });
@@ -644,8 +660,8 @@ ipcMain.handle('file:read', async (_event, filePath) => {
 
 // --- FILE: Natural Language Edit (no regex parsing needed) ---
 ipcMain.on('file:nl_edit', async (event, { text, requestId }) => {
-  if (!genAI) {
-    event.sender.send('file:edit:error', { requestId, error: 'Gemini API not configured.' });
+  if (!groq) {
+    event.sender.send('file:edit:error', { requestId, error: 'Groq API not configured.' });
     return;
   }
 
@@ -654,16 +670,17 @@ ipcMain.on('file:nl_edit', async (event, { text, requestId }) => {
     return;
   }
   inFlightRequests.add(requestId);
-  const cleanup = () => { inFlightRequests.delete(requestId); };
+  var cleanup = function() { inFlightRequests.delete(requestId); };
 
   try {
     // Get list of files in the project
-    const files = [];
+    var files = [];
     function collect(dir, prefix) {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const e of entries) {
+      var entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i];
         if (e.name.startsWith('.') || e.name === 'node_modules' || e.name === '.venv' || e.name === '__pycache__') continue;
-        const r = prefix ? prefix + '/' + e.name : e.name;
+        var r = prefix ? prefix + '/' + e.name : e.name;
         if (e.isDirectory()) { collect(path.join(dir, e.name), r); }
         else { files.push(r); }
       }
@@ -672,24 +689,27 @@ ipcMain.on('file:nl_edit', async (event, { text, requestId }) => {
 
     event.sender.send('file:edit:delta', { requestId, content: '\ud83e\udde0 Understanding your request...\n\n' });
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-    let targetFile = null;
+    var targetFile = null;
 
     if (files.length === 1) {
       targetFile = files[0];
     } else if (files.length > 1) {
-      const list = files.map((f, i) => (i + 1) + '. ' + f).join('\n');
-      const pickPrompt = 'Given these files in the project:\n' + list + '\n\nThe user said: "' + text + '"\n\nWhich file should be edited or created? If creating new, suggest a filename. Reply with ONLY the filename. No explanation.';
-      const pickResult = await model.generateContent(pickPrompt);
-      const picked = pickResult.response.text().trim();
-      if (files.includes(picked) || picked.includes('.') || picked.includes('/')) {
+      var list = files.map(function(f, i) { return (i + 1) + '. ' + f; }).join('\n');
+      var pickPrompt = 'Given these files in the project:\n' + list + '\n\nThe user said: "' + text + '"\n\nWhich file should be edited or created? If creating new, suggest a filename. Reply with ONLY the filename. No explanation.';
+      var pickResult = await groq.chat.completions.create({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: pickPrompt }],
+        stream: false,
+      });
+      var picked = (pickResult.choices[0]?.message?.content || '').trim();
+      if (files.indexOf(picked) >= 0 || picked.indexOf('.') >= 0 || picked.indexOf('/') >= 0) {
         targetFile = picked;
       }
     }
 
     // Fallback: look for a filename directly in the user's text
     if (!targetFile) {
-      const match = text.match(/\b(\S+\.\w{1,6})\b/);
+      var match = text.match(/\b(\S+\.\w{1,6})\b/);
       if (match) targetFile = match[1];
     }
 
@@ -701,20 +721,20 @@ ipcMain.on('file:nl_edit', async (event, { text, requestId }) => {
     }
 
     // Resolve and edit the file
-    const basePath = currentProjectPath || '';
-    const resolvedPath = path.isAbsolute(targetFile) ? targetFile : path.join(basePath, targetFile);
-    const absolutePath = path.resolve(basePath, resolvedPath);
+    var basePath = currentProjectPath || '';
+    var resolvedPath = path.isAbsolute(targetFile) ? targetFile : path.join(basePath, targetFile);
+    var absolutePath = path.resolve(basePath, resolvedPath);
     if (currentProjectPath && !absolutePath.startsWith(path.resolve(currentProjectPath))) {
       event.sender.send('file:edit:error', { requestId, error: 'Access denied.' });
       cleanup();
       return;
     }
 
-    const ext = path.extname(resolvedPath).slice(1);
-    const fileName = path.basename(resolvedPath);
-    const isNewFile = !fs.existsSync(resolvedPath);
+    var ext = path.extname(resolvedPath).slice(1);
+    var fileName = path.basename(resolvedPath);
+    var isNewFile = !fs.existsSync(resolvedPath);
 
-    let fileContent = '';
+    var fileContent = '';
     if (isNewFile) {
       event.sender.send('file:edit:delta', { requestId, content: '\u2728 Creating new file **' + targetFile + '**...\n\n' });
     } else {
@@ -722,16 +742,20 @@ ipcMain.on('file:nl_edit', async (event, { text, requestId }) => {
       event.sender.send('file:edit:delta', { requestId, content: '\ud83d\udcdd Editing **' + fileName + '**...\n\n' });
     }
 
-    const currentLabel = isNewFile ? '(new file - no content yet)' : '';
-    const availableFiles = files.map(function(f) { return '- ' + f; }).join('\n');
-    const prompt = 'You are a code editor. Given a file ' + (isNewFile ? 'to create' : '') + ' and an instruction, return ONLY the complete new file content. Do not include any explanations, markdown code blocks, or extra text - just the raw file content.\n\nFile: ' + fileName + '\nExtension: .' + ext + '\nAvailable project files:\n' + availableFiles + '\n' + (currentLabel ? 'Status: ' + currentLabel : 'Current content:\n```\n' + fileContent + '\n```') + '\n\nUser request: ' + text + '\n\nNew content:';
+    var currentLabel = isNewFile ? '(new file - no content yet)' : '';
+    var availableFiles = files.map(function(f) { return '- ' + f; }).join('\n');
+    var prompt = 'You are a code editor. Given a file ' + (isNewFile ? 'to create' : '') + ' and an instruction, return ONLY the complete new file content. Do not include any explanations, markdown code blocks, or extra text - just the raw file content.\n\nFile: ' + fileName + '\nExtension: .' + ext + '\nAvailable project files:\n' + availableFiles + '\n' + (currentLabel ? 'Status: ' + currentLabel : 'Current content:\n```\n' + fileContent + '\n```') + '\n\nUser request: ' + text + '\n\nNew content:';
 
-    const result = await model.generateContentStream(prompt);
+    var stream = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      stream: true,
+    });
 
-    let newContent = '';
-    for await (const chunk of result.stream) {
-      if (chunk) {
-        const t = chunk.text();
+    var newContent = '';
+    for await (var chunk of stream) {
+      var t = chunk.choices[0]?.delta?.content || '';
+      if (t) {
         newContent += t;
         try { event.sender.send('file:edit:delta', { requestId, content: t }); }
         catch (sendErr) { console.warn('[FileNL] Send failed:', sendErr.message); break; }
@@ -740,14 +764,14 @@ ipcMain.on('file:nl_edit', async (event, { text, requestId }) => {
 
     newContent = newContent.replace(/^```[\w]*\n?/gm, '').replace(/\n?```$/gm, '').trim();
 
-    const dirPath = path.dirname(resolvedPath);
+    var dirPath = path.dirname(resolvedPath);
     if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 
     fs.writeFileSync(resolvedPath, newContent, 'utf-8');
     console.log('[FileNL] Written ' + newContent.length + ' bytes to ' + fileName + (isNewFile ? ' (created)' : ''));
 
     event.sender.send('file:edit:end', {
-      requestId, path: resolvedPath, fileName,
+      requestId: requestId, path: resolvedPath, fileName: fileName,
       size: newContent.length, created: isNewFile, success: true
     });
   } catch (err) {
@@ -760,8 +784,8 @@ ipcMain.on('file:nl_edit', async (event, { text, requestId }) => {
 
 // --- FILE: Analyze & Fix file (find errors, fix them, save) ---
 ipcMain.on('file:fix', async (event, { fileName, requestId }) => {
-  if (!genAI) {
-    event.sender.send('file:fix:error', { requestId, error: 'Gemini API not configured.' });
+  if (!groq) {
+    event.sender.send('file:fix:error', { requestId, error: 'Groq API not configured.' });
     return;
   }
 
@@ -771,7 +795,7 @@ ipcMain.on('file:fix', async (event, { fileName, requestId }) => {
     return;
   }
   inFlightRequests.add(requestId);
-  const cleanup = () => { inFlightRequests.delete(requestId); };
+  var cleanup = function() { inFlightRequests.delete(requestId); };
 
   if (!checkCooldown(event, requestId)) {
     cleanup();
@@ -780,9 +804,9 @@ ipcMain.on('file:fix', async (event, { fileName, requestId }) => {
 
   try {
     // Resolve file path
-    const basePath = currentProjectPath || '';
-    const resolvedPath = path.isAbsolute(fileName) ? fileName : path.join(basePath, fileName);
-    const absolutePath = path.resolve(basePath, resolvedPath);
+    var basePath = currentProjectPath || '';
+    var resolvedPath = path.isAbsolute(fileName) ? fileName : path.join(basePath, fileName);
+    var absolutePath = path.resolve(basePath, resolvedPath);
     if (currentProjectPath && !absolutePath.startsWith(path.resolve(currentProjectPath))) {
       event.sender.send('file:fix:error', { requestId, error: 'Access denied: file is outside the project folder.' });
       cleanup();
@@ -795,15 +819,13 @@ ipcMain.on('file:fix', async (event, { fileName, requestId }) => {
       return;
     }
 
-    const fileContent = fs.readFileSync(resolvedPath, 'utf-8');
-    const ext = path.extname(resolvedPath).slice(1);
-    const fileBaseName = path.basename(resolvedPath);
+    var fileContent = fs.readFileSync(resolvedPath, 'utf-8');
+    var ext = path.extname(resolvedPath).slice(1);
+    var fileBaseName = path.basename(resolvedPath);
 
     event.sender.send('file:fix:delta', { requestId, content: '\ud83d\udd0d Analyzing **' + fileBaseName + '** for errors...\n\n' });
 
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-
-    const prompt = 'You are a code reviewer and fixer. I will give you a file with code. Your job:\n\n' +
+    var prompt = 'You are a code reviewer and fixer. I will give you a file with code. Your job:\n\n' +
       '1. **Find all errors, bugs, and issues** in the code (syntax errors, logical errors, runtime errors, security issues, etc.)\n' +
       '2. **Explain each issue** clearly — what line, what\'s wrong, and how to fix it\n' +
       '3. **Return the COMPLETE corrected code** at the end in a markdown code block\n\n' +
@@ -823,12 +845,16 @@ ipcMain.on('file:fix', async (event, { fileName, requestId }) => {
       'Current content:\n```\n' + fileContent + '\n```\n' +
       '\nIf no errors are found, explain that and return the original code unchanged.';
 
-    const result = await model.generateContentStream(prompt);
+    var stream = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      stream: true,
+    });
 
-    let fullResponse = '';
-    for await (const chunk of result.stream) {
-      if (chunk) {
-        const t = chunk.text();
+    var fullResponse = '';
+    for await (var chunk of stream) {
+      var t = chunk.choices[0]?.delta?.content || '';
+      if (t) {
         fullResponse += t;
         try { event.sender.send('file:fix:delta', { requestId, content: t }); }
         catch (sendErr) { console.warn('[FileFix] Send failed:', sendErr.message); break; }
@@ -836,10 +862,10 @@ ipcMain.on('file:fix', async (event, { fileName, requestId }) => {
     }
 
     // Extract the fixed code from the last code block
-    let fixedContent = null;
-    const codeBlockRegex = /```[\w]*\n([\s\S]*?)```/g;
-    let match;
-    let lastMatch = null;
+    var fixedContent = null;
+    var codeBlockRegex = /```[\w]*\n([\s\S]*?)```/g;
+    var match;
+    var lastMatch = null;
     while ((match = codeBlockRegex.exec(fullResponse)) !== null) {
       lastMatch = match[1].trim();
     }
@@ -848,26 +874,24 @@ ipcMain.on('file:fix', async (event, { fileName, requestId }) => {
     }
 
     if (fixedContent && fixedContent !== fileContent.trim()) {
-      // Write the fixed file
-      const dirPath = path.dirname(resolvedPath);
+      var dirPath = path.dirname(resolvedPath);
       if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
       fs.writeFileSync(resolvedPath, fixedContent, 'utf-8');
       console.log('[FileFix] Fixed and saved ' + fileBaseName + ' (' + fixedContent.length + ' bytes)');
 
       event.sender.send('file:fix:end', {
-        requestId, path: resolvedPath, fileName: fileBaseName,
+        requestId: requestId, path: resolvedPath, fileName: fileBaseName,
         size: fixedContent.length, hadIssues: true, success: true
       });
     } else if (fixedContent && fixedContent === fileContent.trim()) {
       event.sender.send('file:fix:end', {
-        requestId, path: resolvedPath, fileName: fileBaseName,
+        requestId: requestId, path: resolvedPath, fileName: fileBaseName,
         size: fixedContent.length, hadIssues: false, success: true
       });
     } else {
-      // Could not extract code block — fallback: save entire response
       event.sender.send('file:fix:delta', { requestId, content: '\n\n[Note: Could not extract code block. Saving original file unchanged.]' });
       event.sender.send('file:fix:end', {
-        requestId, path: resolvedPath, fileName: fileBaseName,
+        requestId: requestId, path: resolvedPath, fileName: fileBaseName,
         size: fileContent.length, hadIssues: false, success: true
       });
     }
@@ -881,18 +905,18 @@ ipcMain.on('file:fix', async (event, { fileName, requestId }) => {
 
 // --- FILE: Edit file via Direct Gemini Call ---
 ipcMain.on('file:edit', async (event, { path: filePath, instruction, requestId }) => {
-  if (!genAI) {
-    event.sender.send('file:edit:error', { requestId, error: 'Gemini API not configured.' });
+  if (!groq) {
+    event.sender.send('file:edit:error', { requestId, error: 'Groq API not configured.' });
     return;
   }
 
   // H5: Request deduplication
   if (inFlightRequests.has(requestId)) {
-    console.warn(`[FileEdit] Duplicate request: ${requestId}`);
+    console.warn('[FileEdit] Duplicate request: ' + requestId);
     return;
   }
   inFlightRequests.add(requestId);
-  const cleanup = () => { inFlightRequests.delete(requestId); };
+  var cleanup = function() { inFlightRequests.delete(requestId); };
 
   if (!checkCooldown(event, requestId)) {
     cleanup();
@@ -901,43 +925,43 @@ ipcMain.on('file:edit', async (event, { path: filePath, instruction, requestId }
 
   try {
     // Resolve file path
-    const basePath = currentProjectPath || '';
-    const resolvedPath = path.isAbsolute(filePath) ? filePath : path.join(basePath, filePath);
-    // Path traversal protection
-    const absolutePath = path.resolve(basePath, resolvedPath);
+    var basePath = currentProjectPath || '';
+    var resolvedPath = path.isAbsolute(filePath) ? filePath : path.join(basePath, filePath);
+    var absolutePath = path.resolve(basePath, resolvedPath);
     if (currentProjectPath && !absolutePath.startsWith(path.resolve(currentProjectPath))) {
       event.sender.send('file:edit:error', { requestId, error: 'Access denied: file is outside the project folder.' });
       cleanup();
       return;
     }
 
-    const ext = path.extname(resolvedPath).slice(1);
-    const fileName = path.basename(resolvedPath);
-    const isNewFile = !fs.existsSync(resolvedPath);
+    var ext = path.extname(resolvedPath).slice(1);
+    var fileName = path.basename(resolvedPath);
+    var isNewFile = !fs.existsSync(resolvedPath);
 
-    let fileContent = '';
+    var fileContent = '';
     if (isNewFile) {
-      event.sender.send('file:edit:delta', { requestId, content: `📝 Creating new file **${fileName}**...\n\n` });
+      event.sender.send('file:edit:delta', { requestId, content: '📝 Creating new file **' + fileName + '**...\n\n' });
     } else {
       fileContent = fs.readFileSync(resolvedPath, 'utf-8');
-      event.sender.send('file:edit:delta', { requestId, content: `📝 Editing **${fileName}**...\n\n` });
+      event.sender.send('file:edit:delta', { requestId, content: '📝 Editing **' + fileName + '**...\n\n' });
     }
 
-    // Fresh model call — NOT using geminiChat (Approach 1: separate, no history pollution)
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    var currentLabel = isNewFile ? '(new file — no content yet)' : '';
+    var prompt = 'You are a code editor. Given a file' + (isNewFile ? ' to create' : '') + ' and an instruction, return ONLY the complete new file content. Do not include any explanations, markdown code blocks, or extra text — just the raw file content.\n\nFile: ' + fileName + '\nExtension: .' + ext + '\n' + (currentLabel ? 'Status: ' + currentLabel : 'Current content:\n```\n' + fileContent + '\n```') + '\n\nInstruction: ' + instruction + '\n\nNew content:';
 
-    const currentLabel = isNewFile ? '(new file — no content yet)' : '';
-    const prompt = `You are a code editor. Given a file${isNewFile ? ' to create' : ''} and an instruction, return ONLY the complete new file content. Do not include any explanations, markdown code blocks, or extra text — just the raw file content.\n\nFile: ${fileName}\nExtension: .${ext}\n${currentLabel ? 'Status: ' + currentLabel : 'Current content:\n\`\`\`\n' + fileContent + '\n\`\`\`'}\n\nInstruction: ${instruction}\n\nNew content:`;
+    var stream = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      stream: true,
+    });
 
-    const result = await model.generateContentStream(prompt);
-
-    let newContent = '';
-    for await (const chunk of result.stream) {
-      if (chunk) {
-        const text = chunk.text();
-        newContent += text;
+    var newContent = '';
+    for await (var chunk of stream) {
+      var content = chunk.choices[0]?.delta?.content || '';
+      if (content) {
+        newContent += content;
         try {
-          event.sender.send('file:edit:delta', { requestId, content: text });
+          event.sender.send('file:edit:delta', { requestId, content: content });
         } catch (sendErr) {
           console.warn('[FileEdit] Failed to send delta:', sendErr.message);
           break;
@@ -945,23 +969,20 @@ ipcMain.on('file:edit', async (event, { path: filePath, instruction, requestId }
       }
     }
 
-    // Clean up any markdown code fences Gemini might have added
-    newContent = newContent.replace(/^\`\`\`[\w]*\n?/gm, '').replace(/\n?\`\`\`$/gm, '').trim();
+    newContent = newContent.replace(/^```[\w]*\n?/gm, '').replace(/\n?```$/gm, '').trim();
 
-    // Create the directory if it doesn't exist
-    const dirPath = path.dirname(resolvedPath);
+    var dirPath = path.dirname(resolvedPath);
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
     }
 
-    // Write the new content to the file
     fs.writeFileSync(resolvedPath, newContent, 'utf-8');
-    console.log(`[FileEdit] Written ${newContent.length} bytes to ${fileName}${isNewFile ? ' (created)' : ''}`);
+    console.log('[FileEdit] Written ' + newContent.length + ' bytes to ' + fileName + (isNewFile ? ' (created)' : ''));
 
     event.sender.send('file:edit:end', {
-      requestId,
+      requestId: requestId,
       path: resolvedPath,
-      fileName,
+      fileName: fileName,
       size: newContent.length,
       created: isNewFile,
       success: true
@@ -969,6 +990,73 @@ ipcMain.on('file:edit', async (event, { path: filePath, instruction, requestId }
   } catch (err) {
     console.error('[FileEdit] Error:', err);
     event.sender.send('file:edit:error', { requestId, error: err.message || String(err) });
+  } finally {
+    cleanup();
+  }
+});
+
+// --- AI-Parsed App/Website Opening (Hybrid) ---
+// Uses Groq to determine what app or website to open, then executes it
+ipcMain.on('app:open_with_ai', async (event, { text, requestId }) => {
+  if (!groq) {
+    event.sender.send('app:open_error', { requestId, error: 'Groq API not configured.' });
+    return;
+  }
+
+  if (inFlightRequests.has(requestId)) {
+    console.warn('[AppOpen] Duplicate request: ' + requestId);
+    return;
+  }
+  inFlightRequests.add(requestId);
+  var cleanup = function () { inFlightRequests.delete(requestId); };
+
+  if (!checkCooldown(event, requestId)) {
+    cleanup();
+    return;
+  }
+
+  event.sender.send('app:opening', { requestId, text: '\ud83d\udd0d Identifying...' });
+
+  try {
+    var result = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        {
+          role: 'system',
+          content: 'You identify what app or website a user wants to open. Respond ONLY with a valid JSON object, no markdown, no explanation, no code block.\n\nPossible types:\n- "url": a website — provide the full URL\n- "app": a desktop application — provide the exe name and a fallback URL\n- "settings": a Windows settings URI — provide the URI path\n- "unknown": cannot determine what to open\n\nExamples:\nUser: "open twitter"\n{"type":"url","name":"Twitter","url":"https://twitter.com"}\n\nUser: "open telegram"\n{"type":"app","name":"Telegram","exe":"Telegram.exe","fallbackUrl":"https://web.telegram.org"}\n\nUser: "open discord"\n{"type":"app","name":"Discord","exe":"Discord.exe","fallbackUrl":"https://discord.com/app"}\n\nUser: "open gmail"\n{"type":"url","name":"Gmail","url":"https://mail.google.com"}\n\nUser: "open reddit"\n{"type":"url","name":"Reddit","url":"https://reddit.com"}\n\nUser: "play lofi music"\n{"type":"url","name":"YouTube lofi","url":"https://www.youtube.com/results?search_query=lofi+music"}\n\nUser: "open settings"\n{"type":"settings","name":"Settings","uri":"ms-settings:"}\n\nUser: "open calculator"\n{"type":"app","name":"Calculator","exe":"calc.exe","fallbackUrl":"https://www.google.com/search?q=calculator"}\n\nIf you are not sure: {"type":"unknown","name":"","error":"Could not determine what to open"}'
+        },
+        { role: 'user', content: text }
+      ],
+      stream: false,
+    });
+
+    var rawContent = (result.choices[0]?.message?.content || '').trim();
+    // Remove any accidental markdown code block wrappers
+    rawContent = rawContent.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '').trim();
+    var parsed = JSON.parse(rawContent);
+
+    if (parsed.type === 'url' && parsed.url) {
+      event.sender.send('app:opening', { requestId, text: '\ud83c\udf10 Opening **' + (parsed.name || 'website') + '** in browser...' });
+      openUrl(parsed.url, event, requestId);
+    } else if (parsed.type === 'app' && parsed.exe) {
+      event.sender.send('app:opening', { requestId, text: '\ud83d\ude80 Opening **' + (parsed.name || 'app') + '**...' });
+      openAppWithFallback(parsed.name || parsed.exe, parsed.exe, parsed.fallbackUrl || '', event, requestId);
+    } else if (parsed.type === 'settings' && parsed.uri) {
+      event.sender.send('app:opening', { requestId, text: '\u2699\uFE0F Opening **' + (parsed.name || 'Settings') + '**...' });
+      execFile('cmd.exe', ['/c', 'start', '', parsed.uri], { shell: true }, function (error) {
+        if (error) {
+          event.sender.send('system:command:response', { requestId, success: false, error: error.message });
+          return;
+        }
+        event.sender.send('system:command:response', { requestId, success: true, stdout: 'Opened ' + (parsed.name || parsed.uri) });
+      });
+    } else {
+      // Unknown — fall back to normal AI chat
+      event.sender.send('app:open_error', { requestId, error: parsed.error || 'Could not identify app/website' });
+    }
+  } catch (err) {
+    console.error('[AppOpen] Error:', err);
+    event.sender.send('app:open_error', { requestId, error: err.message || String(err) });
   } finally {
     cleanup();
   }
