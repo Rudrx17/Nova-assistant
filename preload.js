@@ -59,6 +59,16 @@ contextBridge.exposeInMainWorld('nova', {
     voiceHandler = cb;
     while (transcriptQueue.length) cb(transcriptQueue.shift());
   },
+  onWakeWordDetected: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('voice:wake_word_detected', handler);
+    return () => ipcRenderer.removeListener('voice:wake_word_detected', handler);
+  },
+  onWakeWordAborted: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('voice:wake_word_aborted', handler);
+    return () => ipcRenderer.removeListener('voice:wake_word_aborted', handler);
+  },
   startVoice: () => ipcRenderer.send('voice:start'),
   stopVoice: () => ipcRenderer.send('voice:stop'),
   muteVoice: () => ipcRenderer.send('voice:mute'),

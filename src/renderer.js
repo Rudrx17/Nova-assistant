@@ -1005,6 +1005,27 @@ if (readScreenBtn) {
   });
 }
 
+// ===================== Wake Word Handler =====================
+if (window.nova?.onWakeWordDetected) {
+  const cleanup = window.nova.onWakeWordDetected(() => {
+    if (micBtn) micBtn.classList.add('listening');
+    if (statusEl) { statusEl.className = 'status listening'; statusEl.textContent = 'Listening'; }
+    updateAvatarState('listening');
+    if (typeof waveformShow === 'function') waveformShow();
+  });
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onWakeWordAborted) {
+  const cleanup = window.nova.onWakeWordAborted(() => {
+    if (micBtn) micBtn.classList.remove('listening');
+    if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
+    updateAvatarState('thinking');
+    if (typeof waveformHide === 'function') waveformHide();
+  });
+  cleanupFunctions.push(cleanup);
+}
+
 // ===================== Voice Transcript Handler =====================
 if (window.nova?.onVoice) {
   window.nova.onVoice((transcript) => {
@@ -1012,6 +1033,8 @@ if (window.nova?.onVoice) {
     promptInput.value = transcript;
     if (statusEl) { statusEl.className = 'status thinking'; statusEl.textContent = 'Thinking'; }
     updateAvatarState('thinking');
+    if (micBtn) micBtn.classList.remove('listening');
+    if (typeof waveformHide === 'function') waveformHide();
     // Use sendPromptWithFileEdit so voice can trigger file edits, NL edits, and VS Code too
     sendPromptWithFileEdit();
   });

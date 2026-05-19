@@ -37,6 +37,14 @@ check_dependencies()
 import numpy as np
 import sounddevice as sd
 import speech_recognition as sr
+import openwakeword
+from openwakeword.model import Model
+import webrtcvad
+
+# Initialize OpenWakeWord (using built-in hey_jarvis for now)
+# Replace 'hey_jarvis_v0.1' with 'hey_nova.onnx' when your custom model is ready.
+oww_model = Model(wakeword_models=["hey_jarvis_v0.1"], inference_framework="onnx")
+vad = webrtcvad.Vad(3)
 
 recognizer = sr.Recognizer()
 SAMPLE_RATE = 16000
@@ -164,64 +172,109 @@ threading.Thread(target=check_google_speech_connectivity, daemon=True).start()
 # ----------------- transcription -----------------
 def stream_and_transcribe():
     """
-    Capture speech, VAD-chunk, and send to recognizer.
-    Listens continuously until UTTERANCE_TIMEOUT_MS of silence is detected.
+    Capture speech, run OpenWakeWord for wake word detection,
+    then use VAD and send to recognizer.
     """
-    global stop_requested
+    global stop_requested, mic_active
     buffer = []
     frames_in_segment = 0
 
-    def end_segment(reason=""):
-        nonlocal buffer, frames_in_segment
+    # VAD silence tracking
+    silence_frames = 0
+    MAX_SILENCE_FRAMES = 50  # 1.5 seconds at 30ms/frame
+    speech_detected_in_segment = False
+
+    def end_segment(reason="", transcribe=True):
+        nonlocal buffer, frames_in_segment, silence_frames, speech_detected_in_segment
+        global mic_active
         if not buffer:
             return
         pcm = np.concatenate(buffer).tobytes()
         buffer = []
         frames_in_segment = 0
+        silence_frames = 0
+        speech_detected_in_segment = False
+        
+        with _state_lock:
+            mic_active = False
+        
+        # Reset wake word model to avoid double-triggering from the same audio hangover
+        oww_model.reset()
 
-        def do_rec():
-            logger.debug(f"Ending segment ({reason}), sending {len(pcm)} bytes to recognizer")
-            recognized_text = recognize_bytes(pcm)
-            with _state_lock:
-                is_muted = muted > 0
-            if recognized_text and not is_muted:
-                logger.info(f"Transcript: {recognized_text}")
-                print(f"TRANSCRIPT::{recognized_text}", flush=True)
+        if transcribe:
+            def do_rec():
+                logger.debug(f"Ending segment ({reason}), sending {len(pcm)} bytes to recognizer")
+                recognized_text = recognize_bytes(pcm)
+                with _state_lock:
+                    is_muted = muted > 0
+                if recognized_text and not is_muted:
+                    logger.info(f"Transcript: {recognized_text}")
+                    print(f"TRANSCRIPT::{recognized_text}", flush=True)
 
-        threading.Thread(target=do_rec, daemon=True).start()
+            threading.Thread(target=do_rec, daemon=True).start()
+        else:
+            logger.debug(f"Segment aborted ({reason})")
 
-    # Throttle counter for audio level reporting (~90ms intervals)
     _level_frames = 0
 
     def audio_callback(indata, frames, t, status):
-        nonlocal buffer, _level_frames
+        nonlocal buffer, _level_frames, silence_frames, speech_detected_in_segment
+        global mic_active
         if status:
             logger.debug(f"Audio status: {status}")
 
         data = indata.copy().reshape(-1)
+        
+        with _state_lock:
+            is_active = mic_active
+
         for i in range(0, len(data), FRAME_SAMPLES):
             frame = data[i:i+FRAME_SAMPLES]
             if frame.size < FRAME_SAMPLES:
                 continue
             frame_i16 = frame.astype(np.int16)
 
-            # Push-to-talk: capture ALL audio frames (including silence between words)
-            # Let Google Speech handle VAD internally
-            buffer.append(frame_i16)
+            if not is_active:
+                # STATE A: Wait for Wake Word
+                prediction = oww_model.predict(frame_i16)
+                # We're using hey_jarvis_v0.1 for now, change to hey_nova when trained.
+                if prediction.get('hey_jarvis_v0.1', 0) > 0.5:
+                    print("EVENT::WAKE_WORD_DETECTED", flush=True)
+                    speech_detected_in_segment = False
+                    with _state_lock:
+                        mic_active = True
+                        is_active = True
+            else:
+                # STATE B: Active Recording
+                buffer.append(frame_i16)
 
-            # Compute RMS energy for live waveform visualization
-            energy = float(np.sqrt(np.mean(frame_i16.astype(np.float32) ** 2)))
-            level = min(1.0, energy / 3000.0)
+                # VAD silence detection
+                is_speech = vad.is_speech(frame_i16.tobytes(), SAMPLE_RATE)
+                if is_speech:
+                    silence_frames = 0
+                    speech_detected_in_segment = True
+                else:
+                    silence_frames += 1
 
-            # Send audio level to UI (~90ms intervals: every 3 frames at 30ms/frame)
-            _level_frames += 1
-            if _level_frames >= 3:
-                _level_frames = 0
-                print(f"LEVEL::{level:.3f}", flush=True)
+                # Send audio level to UI
+                energy = float(np.sqrt(np.mean(frame_i16.astype(np.float32) ** 2)))
+                level = min(1.0, energy / 3000.0)
+                _level_frames += 1
+                if _level_frames >= 3:
+                    _level_frames = 0
+                    print(f"LEVEL::{level:.3f}", flush=True)
 
-            # Auto-cut for very long recordings
-            if len(buffer) * FRAME_MS >= MAX_SEGMENT_MS:
-                end_segment("max length reached")
+                if silence_frames > MAX_SILENCE_FRAMES:
+                    if speech_detected_in_segment:
+                        end_segment("silence_detected", transcribe=True)
+                    elif len(buffer) > 100: # Abort after 3s if no speech was ever detected
+                        print("EVENT::WAKE_WORD_ABORTED", flush=True)
+                        end_segment("abort_no_speech", transcribe=False)
+                    break
+
+                if len(buffer) * FRAME_MS >= MAX_SEGMENT_MS:
+                    end_segment("max_length_reached", transcribe=True)
+                    break
 
     print("STATE::LISTENING", flush=True)
     with sd.InputStream(samplerate=SAMPLE_RATE, channels=1, dtype='int16',
@@ -232,33 +285,17 @@ def stream_and_transcribe():
                 should_stop = stop_requested
             if should_stop:
                 logger.info("Stop requested; breaking capture")
-                end_segment("stopped")  # Flush any remaining audio in buffer
+                end_segment("stopped")
                 with _state_lock:
                     stop_requested = False
-                break
-
             time.sleep(0.01)
-
-    print("STATE::IDLE", flush=True)
-
 
 # ----------------- main loop -----------------
 if __name__ == "__main__":
     try:
         print("MODE::MIC", flush=True)
-        while True:
-            pump_commands_nonblock()
-
-            with _state_lock:
-                is_mic_active = mic_active
-
-            if is_mic_active:
-                stream_and_transcribe()
-                with _state_lock:
-                    mic_active = False
-            else:
-                time.sleep(0.05)
-
+        # Start continuous stream
+        stream_and_transcribe()
     except KeyboardInterrupt:
         logger.info("Shutting down by user request")
     except Exception as e:

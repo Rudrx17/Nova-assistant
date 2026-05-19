@@ -159,6 +159,10 @@ function startPythonProcess() {
       } else if (msg.startsWith("SCREENSHOT::")) {
         lastScreenshot = msg.replace("SCREENSHOT::", "").trim();
         if (win) win.webContents.send('voice:screenshot_taken');
+      } else if (msg === "EVENT::WAKE_WORD_DETECTED") {
+        if (win) win.webContents.send('voice:wake_word_detected');
+      } else if (msg === "EVENT::WAKE_WORD_ABORTED") {
+        if (win) win.webContents.send('voice:wake_word_aborted');
       } else if (msg.startsWith("ERROR::")) {
         const errorText = msg.replace("ERROR::", "").trim();
         console.error("[Python ERROR]", errorText);
