@@ -166,6 +166,9 @@ function handleSystemCommandSuggestion(aiResponse, requestId) {
   }
 }
 
+// ===================== Cleanup Registry (declared early for TDZ safety) =====================
+const cleanupFunctions = [];
+
 // ===================== Live Waveform Visualizer =====================
 let waveformShow = null;
 let waveformHide = null;
@@ -276,9 +279,7 @@ if (waveformCanvas) {
         animFrame = requestAnimationFrame(drawWaveform);
       }
     });
-    if (typeof cleanupFunctions !== 'undefined') {
-      cleanupFunctions.push(levelCleanup);
-    }
+    cleanupFunctions.push(levelCleanup);
   }
 
   resizeCanvas();
@@ -421,7 +422,6 @@ if (window.nova?.onVoice) {
 }
 
 // ===================== AI Streaming Handlers (H3: with cleanup) =====================
-const cleanupFunctions = [];
 
 if (window.nova?.onDelta) {
   const cleanup = window.nova.onDelta(({ content }) => updateLastMsg(content));
