@@ -9,8 +9,8 @@
     "postinstall": "electron --version || true"
   },
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "dotenv": "^17.2.1"
+    "dotenv": "^17.2.1",
+    "openai": "^6.38.0"
   },
   "devDependencies": {
     "electron": "^31.0.0"

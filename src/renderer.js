@@ -408,6 +408,50 @@ function bindMicControls() {
 
 bindMicControls();
 
+// ===================== Basic System Commands (pre-AI interception) =====================
+// These are matched BEFORE reaching the AI — saves API calls and ensures they actually execute
+const SYSTEM_COMMANDS = [
+  { keywords: ['notepad'], cmd: 'open notepad', label: 'Notepad', action: /^(open|launch|start)\b/i },
+  { keywords: ['calculator', 'calc'], cmd: 'open calculator', label: 'Calculator', action: /^(open|launch|start)\b/i },
+  { keywords: ['paint', 'mspaint'], cmd: 'open paint', label: 'Paint', action: /^(open|launch|start)\b/i },
+  { keywords: ['desktop'], cmd: 'show desktop', label: 'Desktop', action: /^show\b/i },
+  { keywords: ['lock computer', 'lock the computer', 'lock my computer', 'lock pc', 'lock the pc', 'lock my pc', 'lock screen', 'lock the screen'], cmd: 'lock computer', label: 'Computer lock', action: /^lock\b/i },
+];
+
+function isBasicSystemCommand(text) {
+  const lower = text.toLowerCase().trim();
+  for (let i = 0; i < SYSTEM_COMMANDS.length; i++) {
+    const cmd = SYSTEM_COMMANDS[i];
+    if (!cmd.action.test(lower)) continue;
+    for (let j = 0; j < cmd.keywords.length; j++) {
+      if (lower.indexOf(cmd.keywords[j]) >= 0) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function getSystemCommand(text) {
+  const lower = text.toLowerCase().trim();
+  for (let i = 0; i < SYSTEM_COMMANDS.length; i++) {
+    const cmd = SYSTEM_COMMANDS[i];
+    if (!cmd.action.test(lower)) continue;
+    for (let j = 0; j < cmd.keywords.length; j++) {
+      if (lower.indexOf(cmd.keywords[j]) >= 0) {
+        return cmd;
+      }
+    }
+  }
+  return null;
+}
+
+function handleSystemCommand(cmdInfo) {
+  addMsg('\u2699\uFE0F Executing: **' + cmdInfo.label + '**...', 'assistant');
+  const requestId = Date.now().toString();
+  window.nova.runSystemCommand(cmdInfo.cmd, requestId);
+}
+
 // ===================== App/Website Open Handler =====================
 // Known apps/websites that can be opened directly
 const APP_COMMANDS = [
@@ -450,6 +494,22 @@ function handleAppOpenCommand(appInfo) {
   addMsg('\ud83d\ude80 Opening **' + label + '**...', 'assistant');
   const requestId = Date.now().toString();
   window.nova.runSystemCommand(appInfo.cmd || ('open ' + label.toLowerCase()), requestId);
+}
+
+// ===================== AI-Parsed App/Website Opening (Hybrid) =====================
+// Catch-all: anything starting with "open/launch/start/play" that wasn't caught by
+// the instant whitelist above gets parsed by Groq to determine what to open
+function isAiOpenIntent(text) {
+  return /^(open|launch|start|play)\b/i.test(text.toLowerCase().trim());
+}
+
+// Store the original text so we can fall back to AI chat if Groq can't identify it
+let pendingAiAppText = null;
+
+function handleAiAppOpen(text) {
+  pendingAiAppText = text;
+  const requestId = Date.now().toString();
+  window.nova.openWithAi(text, requestId);
 }
 
 // ===================== File Fix (Analyze & Fix) Intent =====================
@@ -769,7 +829,24 @@ async function sendPromptWithFileEdit() {
     speechManager.stop();
   }
 
-  // Check for VS Code intent FIRST (before file edit or AI)
+  // Check for basic system commands FIRST (notepad, calculator, paint, show desktop, lock computer)
+  if (isBasicSystemCommand(text)) {
+    addMsg(text, 'user');
+    promptInput.value = '';
+    addMsg('', 'assistant');
+    const sysCmd = getSystemCommand(text);
+    if (sysCmd) {
+      handleSystemCommand(sysCmd);
+    } else {
+      const requestId = Date.now().toString();
+      try { window.nova.ask(text, requestId); } catch (e) {
+        updateLastMsg('\\n[Error: ' + (e?.message || e) + ']');
+      }
+    }
+    return;
+  }
+
+  // Check for VS Code intent (before file edit or AI)
   if (isVsCodeIntent(text)) {
     addMsg(text, 'user');
     promptInput.value = '';
@@ -793,6 +870,17 @@ async function sendPromptWithFileEdit() {
         updateLastMsg('\\n[Error: ' + (e?.message || e) + ']');
       }
     }
+    return;
+  }
+
+  // Check for AI-parsed app/website opening (catch-all — handles anything that starts with "open/launch/start/play")
+  // This runs INSTEAD of sending to AI chat, so "open Twitter" actually opens Twitter
+  // instead of getting text instructions back. Uses 1 Groq API call.
+  if (isAiOpenIntent(text)) {
+    addMsg(text, 'user');
+    promptInput.value = '';
+    addMsg('', 'assistant');
+    handleAiAppOpen(text);
     return;
   }
 
@@ -927,6 +1015,31 @@ if (window.nova?.onVoice) {
     // Use sendPromptWithFileEdit so voice can trigger file edits, NL edits, and VS Code too
     sendPromptWithFileEdit();
   });
+}
+
+// ===================== AI App Open Handlers (Hybrid) =====================
+if (window.nova?.onAppOpening) {
+  const cleanup = window.nova.onAppOpening(({ text: status }) => {
+    if (status) updateLastMsg(status);
+  });
+  cleanupFunctions.push(cleanup);
+}
+
+if (window.nova?.onAppOpenError) {
+  const cleanup = window.nova.onAppOpenError(({ error }) => {
+    // Fall back to normal AI chat if Groq couldn't identify the app
+    if (pendingAiAppText) {
+      updateLastMsg('\n\n[Could not identify — trying AI chat...]');
+      var fallbackId = Date.now().toString();
+      try { window.nova.ask(pendingAiAppText, fallbackId); } catch (e) {
+        updateLastMsg('\n[Error: ' + (e?.message || e) + ']');
+      }
+      pendingAiAppText = null;
+    } else {
+      updateLastMsg('\n\n[Error: ' + error + ']');
+    }
+  });
+  cleanupFunctions.push(cleanup);
 }
 
 // ===================== AI Streaming Handlers (H3: with cleanup) =====================

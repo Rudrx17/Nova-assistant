@@ -118,6 +118,20 @@ contextBridge.exposeInMainWorld('nova', {
     return () => { ipcRenderer.removeListener('file:fix:error', handler); };
   },
 
+  // --- AI-Parsed App/Website Opening ---
+  openWithAi: (text, requestId) =>
+    ipcRenderer.send('app:open_with_ai', { text, requestId }),
+  onAppOpening: (cb) => {
+    const handler = (_e, data) => cb(data);
+    ipcRenderer.on('app:opening', handler);
+    return () => { ipcRenderer.removeListener('app:opening', handler); };
+  },
+  onAppOpenError: (cb) => {
+    const handler = (_e, data) => cb(data);
+    ipcRenderer.on('app:open_error', handler);
+    return () => { ipcRenderer.removeListener('app:open_error', handler); };
+  },
+
   // --- File Editor ---
   openFolder: () => ipcRenderer.invoke('file:open_folder'),
   readFile: (filePath) => ipcRenderer.invoke('file:read', filePath),
@@ -155,6 +169,8 @@ contextBridge.exposeInMainWorld('nova', {
     ipcRenderer.removeAllListeners('file:fix:delta');
     ipcRenderer.removeAllListeners('file:fix:end');
     ipcRenderer.removeAllListeners('file:fix:error');
+    ipcRenderer.removeAllListeners('app:opening');
+    ipcRenderer.removeAllListeners('app:open_error');
     _listeners.delta = null;
     _listeners.end = null;
     _listeners.error = null;
